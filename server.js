@@ -227,6 +227,10 @@ app.get('/api/groups', async function (req, res) {
             return { id: g.id._serialized, name: g.name || '(sans nom)' };
         });
         console.log('Groupes trouves:', groups.length);
+        if (groups.length > 0) {
+            console.log('--- LISTE DES GROUPES ---');
+            groups.forEach(function(g) { console.log('Nom: ' + g.name + ' | ID: ' + g.id); });
+        }
         res.json(groups);
     } catch (err) {
         console.error('Erreur getChats:', err);
@@ -305,11 +309,17 @@ function attachClientEvents() {
         console.log('Saisis ce code dans WhatsApp > Appareils connectes');
     });
 
-    client.on('ready', function () {
+    client.on('ready', async function () {
         qrCodeData = null;
         pairingCodeData = null;
         clientStatus = 'connected';
         console.log('WhatsApp connecte !');
+        try {
+            var chats = await client.getChats();
+            var groups = chats.filter(function(c) { return c.isGroup; });
+            console.log('--- LISTE DES GROUPES ---');
+            groups.forEach(function(g) { console.log('Nom: ' + (g.name || '(sans nom)') + ' | ID: ' + g.id._serialized); });
+        } catch (_) {}
     });
 
     client.on('disconnected', function (reason) {
