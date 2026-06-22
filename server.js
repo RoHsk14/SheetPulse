@@ -156,7 +156,10 @@ app.get('/config', function (req, res) {
         + '<div id="toast" class="hidden fixed bottom-4 right-4 px-6 py-3 bg-green-600 text-white rounded-lg shadow-lg"></div>'
         + '<script>'
         + (clientStatus === 'connected' ? (
-            'fetch("/api/groups").then(function(r){ return r.json(); }).then(function(groups){'
+            'fetch("/api/groups").then(function(r){'
+            + '  if (!r.ok) return r.json().then(function(e){ throw new Error(e.error); });'
+            + '  return r.json();'
+            + '}).then(function(groups){'
             + '  var sel = document.getElementById("groupSelect");'
             + '  sel.innerHTML = "<option value=\"\">-- Selectionne un groupe --</option>";'
             + '  groups.forEach(function(g){'
@@ -167,7 +170,8 @@ app.get('/config', function (req, res) {
             + '    sel.appendChild(opt);'
             + '  });'
             + '  document.getElementById("groupStatus").textContent = groups.length + " groupe(s) trouve(s)";'
-            + '}).catch(function(){ document.getElementById("groupStatus").textContent = "Erreur chargement groupes"; });'
+            + '  document.getElementById("groupSelect").disabled = false;'
+            + '}).catch(function(e){ document.getElementById("groupStatus").textContent = "Erreur: " + e.message; });'
         ) : '')
         + 'document.getElementById("configForm").addEventListener("submit", async function(e){'
         + '  e.preventDefault();'
@@ -216,13 +220,17 @@ app.get('/integration', function (req, res) {
 app.get('/api/groups', async function (req, res) {
     if (clientStatus !== 'connected') return res.status(503).json({ error: 'WhatsApp non connecte' });
     try {
+        console.log('Chargement des groupes...');
         var chats = await client.getChats();
+        console.log('Chats recus:', chats.length);
         var groups = chats.filter(function(c) { return c.isGroup; }).map(function(g) {
-            return { id: g.id._serialized, name: g.name };
+            return { id: g.id._serialized, name: g.name || '(sans nom)' };
         });
+        console.log('Groupes trouves:', groups.length);
         res.json(groups);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error('Erreur getChats:', err);
+        res.status(500).json({ error: err.message, stack: err.stack });
     }
 });
 
