@@ -24,7 +24,7 @@ let clientStatus = 'initializing';
 
 function generateAppsScript(baseUrl) {
     return [
-        'function onEdit(e) {',
+        'function sheetPulseOnEdit(e) {',
         '  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();',
         '  var lastRow = sheet.getLastRow();',
         '  var date = sheet.getRange(lastRow, 1).getValue();',
@@ -49,6 +49,20 @@ function generateAppsScript(baseUrl) {
         '  var opts = { method: "post", contentType: "application/json",',
         '    payload: JSON.stringify({ message: msg }), muteHttpExceptions: true };',
         '  UrlFetchApp.fetch("' + baseUrl + '/webhook", opts);',
+        '}',
+        '',
+        'function sheetPulseSetup() {',
+        '  var sheet = SpreadsheetApp.getActiveSpreadsheet();',
+        '  var triggers = ScriptApp.getProjectTriggers();',
+        '  for (var i = 0; i < triggers.length; i++) {',
+        '    if (triggers[i].getHandlerFunction() === "sheetPulseOnEdit") {',
+        '      ScriptApp.deleteTrigger(triggers[i]);',
+        '    }',
+        '  }',
+        '  ScriptApp.newTrigger("sheetPulseOnEdit")',
+        '    .forSpreadsheet(sheet)',
+        '    .onEdit()',
+        '    .create();',
         '}'
     ].join('\n');
 }
@@ -263,16 +277,18 @@ app.get('/integration', function (req, res) {
         + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Apps Script a copier</h2>'
         + '<p class="text-sm text-gray-500 mb-4">Colle ce code dans <span class="font-mono bg-gray-100 px-2 py-0.5 rounded">Extensions > Apps Script</span> sur ton Sheet.</p>'
         + '<div class="relative">'
-        + '<textarea id="scriptCode" rows="14" readonly class="w-full px-4 py-3 bg-gray-50 border rounded-lg font-mono text-sm">' + scriptCode + '</textarea>'
+        + '<textarea id="scriptCode" rows="22" readonly class="w-full px-4 py-3 bg-gray-50 border rounded-lg font-mono text-sm">' + scriptCode + '</textarea>'
         + '<button onclick="navigator.clipboard.writeText(document.getElementById(\'scriptCode\').value)" class="absolute top-2 right-2 px-3 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700">Copier</button></div></div>'
         + '<div class="bg-white rounded-xl shadow-sm border p-6">'
         + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Instructions</h2>'
         + '<ol class="list-decimal list-inside space-y-2 text-gray-600">'
-        + '<li>Cree un Google Sheet avec les colonnes <strong>A, B, C, D</strong> comme indique ci-dessus</li>'
+        + '<li>Ouvre ton Google Sheet de commandes</li>'
         + '<li>Va dans <strong>Extensions > Apps Script</strong></li>'
         + '<li>Supprime le code par defaut et colle le code ci-dessus</li>'
         + '<li>Clique sur <strong>Enregistrer</strong> (icone disquette)</li>'
-        + '<li>Ajoute une ligne de commande dans le Sheet → le message sera envoye automatiquement</li></ol></div></div>'
+        + '<li>Dans la liste des fonctions, choisis <strong>sheetPulseSetup</strong> puis clique <strong>Run ▶️</strong></li>'
+        + '<li>Autorise les permissions demandees</li>'
+        + '<li>Une fois le setup fait, ajoute une ligne dans le Sheet → le message sera envoye automatiquement</li></ol></div></div>'
         + '<script>'
         + 'document.getElementById("urlForm").addEventListener("submit", async function(e){'
         + '  e.preventDefault();'
