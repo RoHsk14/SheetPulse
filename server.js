@@ -1,15 +1,205 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const express = require('express');
+const fs = require('fs');
+
+const CONFIG_PATH = './config.json';
+
+function loadConfig() {
+    try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); }
+    catch { return { groupId: '', columns: {} }; }
+}
+function saveConfig(config) {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+}
 
 const app = express();
 app.use(express.json());
 
+let config = loadConfig();
 let qrCodeData = null;
 let clientStatus = 'initializing';
 
-const client = new Client({
+function generateAppsScript(baseUrl, cols) {
+    return [
+        'function onEdit(e) {',
+        '  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();',
+        '  var lastRow = sheet.getLastRow();',
+        '  var id = sheet.getRange(lastRow, ' + (cols.id || 1) + ').getValue();',
+        '  var client = sheet.getRange(lastRow, ' + (cols.client || 2) + ').getValue();',
+        '  var produits = sheet.getRange(lastRow, ' + (cols.produits || 3) + ').getValue();',
+        '  var total = sheet.getRange(lastRow, ' + (cols.total || 4) + ').getValue();',
+        '  if (!id) return;',
+        '  var msg = "📦 *NOUVELLE COMMANDE* 📦\\n\\n"',
+        '    + "• ID : " + id + "\\n"',
+        '    + "• Client : " + client + "\\n"',
+        '    + "• Commande : " + produits + "\\n"',
+        '    + "• Total : " + total + " FCFA\\n\\n"',
+        '    + "⚡ À traiter rapidement !";',
+        '  var opts = {',
+        '    method: "post",',
+        '    contentType: "application/json",',
+        '    payload: JSON.stringify({ message: msg }),',
+        '    muteHttpExceptions: true',
+        '  };',
+        '  UrlFetchApp.fetch("' + baseUrl + '/webhook", opts);',
+        '}'
+    ].join('\n');
+}
+
+function baseHtml(title, content) {
+    return '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+        + '<title>' + title + ' - SheetPulse</title>'
+        + '<script src="https://cdn.tailwindcss.com"></script></head>'
+        + '<body class="bg-gray-50 min-h-screen">'
+        + '<nav class="bg-white shadow-sm border-b">'
+        + '<div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">'
+        + '<a href="/" class="text-xl font-bold text-gray-800">SheetPulse</a>'
+        + '<div class="flex gap-4 text-sm">'
+        + '<a href="/" class="text-gray-600 hover:text-gray-900' + (title === 'Dashboard' ? ' font-semibold text-blue-600' : '') + '">Dashboard</a>'
+        + '<a href="/config" class="text-gray-600 hover:text-gray-900' + (title === 'Configuration' ? ' font-semibold text-blue-600' : '') + '">Configuration</a>'
+        + '<a href="/integration" class="text-gray-600 hover:text-gray-900' + (title === 'Integration' ? ' font-semibold text-blue-600' : '') + '">Integration</a>'
+        + '</div></div></nav>'
+        + '<div class="max-w-5xl mx-auto px-4 py-8">' + content + '</div></body></html>';
+}
+
+app.get('/', function (req, res) {
+    if (clientStatus === 'connected') {
+        res.send(baseHtml('Dashboard',
+            '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
+            + '<div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">'
+            + '<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></div>'
+            + '<h1 class="text-2xl font-bold text-gray-800 mb-2">WhatsApp connecte</h1>'
+            + '<p class="text-gray-500 mb-6">Le bot est pret a recevoir des commandes.</p>'
+            + '<div class="flex justify-center gap-4">'
+            + '<a href="/config" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Configurer</a>'
+            + '<a href="/integration" class="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Voir l integration</a></div>'
+            + (config.groupId ? '<p class="mt-6 text-sm text-gray-400">Groupe cible : <span class="font-mono text-gray-600">' + config.groupId + '</span></p>' : '')
+            + '</div>'
+        ));
+    } else if (qrCodeData) {
+        QRCode.toDataURL(qrCodeData, function (err, url) {
+            if (err) return res.status(500).send('Erreur');
+            res.send(baseHtml('Dashboard',
+                '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
+                + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Scannez le QR code</h1>'
+                + '<p class="text-gray-500 mb-6">Ouvrez WhatsApp > Appareils connectes > Connecter un appareil</p>'
+                + '<img src="' + url + '" alt="QR Code" class="w-64 h-64 mx-auto rounded-lg border p-2"/>'
+                + '<p class="mt-4 text-sm text-gray-400">Scannez avec votre telephone</p>'
+                + '</div>'
+            ));
+        });
+    } else {
+        res.send(baseHtml('Dashboard',
+            '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
+            + '<div class="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">'
+            + '<svg class="w-8 h-8 text-yellow-600 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></div>'
+            + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Initialisation en cours...</h1>'
+            + '<p class="text-gray-500">Preparation de WhatsApp, veuillez patienter.</p>'
+            + '<p class="mt-4 text-sm text-gray-400">La page se recharge automatiquement.</p></div>'
+            + '<script>setTimeout(function(){ location.reload(); }, 3000);</script>'
+        ));
+    }
+});
+
+app.get('/config', function (req, res) {
+    var c = config.columns || {};
+    var fields = [
+        { key: 'id', label: 'ID commande', ph: '1' },
+        { key: 'client', label: 'Nom client', ph: '2' },
+        { key: 'produits', label: 'Produits commandes', ph: '3' },
+        { key: 'total', label: 'Total (FCFA)', ph: '4' },
+        { key: 'statut', label: 'Statut', ph: '5' }
+    ];
+    var inputs = fields.map(function (f) {
+        return '<div><label class="block text-sm font-medium text-gray-700 mb-1">' + f.label + '</label>'
+            + '<input type="number" name="col_' + f.key + '" value="' + (c[f.key] || '') + '" placeholder="' + f.ph + '"'
+            + ' class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></div>';
+    }).join('');
+
+    res.send(baseHtml('Configuration',
+        '<h1 class="text-2xl font-bold text-gray-800 mb-6">Configuration</h1>'
+        + '<form id="configForm" class="space-y-6">'
+        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-4">Groupe WhatsApp</h2>'
+        + '<label class="block text-sm font-medium text-gray-700 mb-1">ID du groupe</label>'
+        + '<input type="text" name="groupId" value="' + (config.groupId || '') + '" placeholder="120363430608871862@g.us"'
+        + ' class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm">'
+        + '<p class="mt-1 text-sm text-gray-400">L ID qui termine par <span class="font-mono">@g.us</span></p></div>'
+        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-4">Mapping des colonnes</h2>'
+        + '<p class="text-sm text-gray-500 mb-4">Indique le numero de chaque colonne (A=1, B=2, C=3...).</p>'
+        + '<div class="grid grid-cols-2 gap-4">' + inputs + '</div></div>'
+        + '<button type="submit" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Enregistrer</button></form>'
+        + '<div id="toast" class="hidden fixed bottom-4 right-4 px-6 py-3 bg-green-600 text-white rounded-lg shadow-lg"></div>'
+        + '<script>'
+        + 'document.getElementById("configForm").addEventListener("submit", async function(e){'
+        + '  e.preventDefault();'
+        + '  var fd = new FormData(e.target);'
+        + '  var data = { groupId: fd.get("groupId"), columns: {} };'
+        + '  for (var pair of fd.entries()) {'
+        + '    if (pair[0].startsWith("col_")) data.columns[pair[0].replace("col_", "")] = parseInt(pair[1]);'
+        + '  }'
+        + '  var r = await fetch("/api/config", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(data) });'
+        + '  if (r.ok) {'
+        + '    var t = document.getElementById("toast");'
+        + '    t.textContent = "Configuration enregistree ✓";'
+        + '    t.classList.remove("hidden");'
+        + '    setTimeout(function(){ t.classList.add("hidden"); }, 3000);'
+        + '  }'
+        + '});'
+        + '</script>'
+    ));
+});
+
+app.get('/integration', function (req, res) {
+    var baseUrl = 'http://localhost:' + (process.env.PORT || 3000);
+    var scriptCode = generateAppsScript(baseUrl, config.columns);
+
+    res.send(baseHtml('Integration',
+        '<h1 class="text-2xl font-bold text-gray-800 mb-6">Integration Google Sheets</h1>'
+        + '<div class="space-y-6">'
+        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">URL du webhook</h2>'
+        + '<div class="flex gap-2">'
+        + '<input type="text" value="' + baseUrl + '/webhook" readonly class="flex-1 px-4 py-2 bg-gray-50 border rounded-lg font-mono text-sm">'
+        + '<button onclick="navigator.clipboard.writeText(\'' + baseUrl + '/webhook\')" class="px-4 py-2 bg-gray-100 border rounded-lg hover:bg-gray-200 text-sm">Copier</button></div></div>'
+        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Apps Script a copier</h2>'
+        + '<p class="text-sm text-gray-500 mb-4">Colle ce code dans <span class="font-mono bg-gray-100 px-2 py-0.5 rounded">Extensions > Apps Script</span>.</p>'
+        + '<div class="relative">'
+        + '<textarea id="scriptCode" rows="14" readonly class="w-full px-4 py-3 bg-gray-50 border rounded-lg font-mono text-sm">' + scriptCode + '</textarea>'
+        + '<button onclick="navigator.clipboard.writeText(document.getElementById(\'scriptCode\').value)" class="absolute top-2 right-2 px-3 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700">Copier</button></div></div>'
+        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Instructions</h2>'
+        + '<ol class="list-decimal list-inside space-y-2 text-gray-600">'
+        + '<li>Ouvre ton Google Sheet de commandes</li>'
+        + '<li>Va dans <strong>Extensions > Apps Script</strong></li>'
+        + '<li>Supprime le code par defaut et colle le code ci-dessus</li>'
+        + '<li>Clique sur <strong>Enregistrer</strong> (icone disquette)</li>'
+        + '<li>Ajoute une ligne dans ton Sheet → le message sera envoye automatiquement</li></ol></div></div>'
+    ));
+});
+
+app.post('/api/config', function (req, res) {
+    var data = req.body;
+    if (data.groupId) config.groupId = data.groupId;
+    if (data.columns) config.columns = data.columns;
+    saveConfig(config);
+    res.json({ success: true });
+});
+
+app.get('/api/config', function (req, res) {
+    res.json(config);
+});
+
+app.get('/status', function (req, res) {
+    res.json({ status: clientStatus, hasQr: !!qrCodeData });
+});
+
+var PORT = process.env.PORT || 3000;
+
+var client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
@@ -26,90 +216,44 @@ const client = new Client({
     }
 });
 
-client.on('qr', async (qr) => {
+client.on('qr', function (qr) {
     qrCodeData = qr;
     clientStatus = 'awaiting_scan';
-    console.log('--- SCANNEZ LE QR CODE CI-DESSOUS AVEC WHATSAPP ---');
-    qrcode.generate(qr, { small: true });
+    console.log('QR code genere - http://localhost:' + PORT + ' pour scanner');
 });
 
-client.on('ready', () => {
+client.on('ready', function () {
     qrCodeData = null;
     clientStatus = 'connected';
-    console.log('Félicitations, le bot WhatsApp est connecté et prêt !');
+    console.log('WhatsApp connecte !');
 });
 
-client.on('disconnected', (reason) => {
+client.on('disconnected', function (reason) {
     clientStatus = 'disconnected';
-    console.log('WhatsApp déconnecté:', reason);
+    console.log('WhatsApp deconnecte:', reason);
 });
 
-app.get('/', (req, res) => {
-    if (clientStatus === 'connected') {
-        res.send(`
-            <html>
-            <head><meta charset="utf-8"><title>WS Sheets Bot</title>
-            <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5}
-            .card{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);text-align:center}
-            .status{color:#22c55e;font-size:18px;font-weight:600}
-            </style></head>
-            <body><div class="card"><div class="status">✅ Connecté à WhatsApp</div><p>Le bot est prêt à recevoir des commandes.</p></div></body></html>
-        `);
-    } else if (qrCodeData) {
-        QRCode.toDataURL(qrCodeData, (err, url) => {
-            if (err) return res.status(500).send('Erreur QR');
-            res.send(`
-                <html>
-                <head><meta charset="utf-8"><title>WS Sheets Bot</title>
-                <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5}
-                .card{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);text-align:center}
-                img{width:300px;height:300px}
-                p{color:#666}
-                </style></head>
-                <body><div class="card"><h2>Scannez ce QR code avec WhatsApp</h2>
-                <img src="${url}" alt="QR Code"/>
-                <p>Ouvrez WhatsApp > Appareils connectés > Connecter un appareil</p></div></body></html>
-            `);
-        });
-    } else {
-        res.send(`
-            <html>
-            <head><meta charset="utf-8"><title>WS Sheets Bot</title>
-            <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5}
-            .card{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);text-align:center}
-            .status{color:#f59e0b;font-size:18px;font-weight:600}
-            </style></head>
-            <body><div class="card"><div class="status">⏳ Initialisation en cours...</div><p>Veuillez patienter, le QR code va apparaître.</p></div></body></html>
-        `);
-    }
-});
-
-app.post('/webhook', async (req, res) => {
-    const { message } = req.body;
-
-    const groupId = process.env.GROUP_ID || '120363430608871862@g.us';
-
+app.post('/webhook', async function (req, res) {
+    var message = req.body.message;
+    var groupId = config.groupId;
+    if (!groupId) return res.status(400).json({ error: 'Groupe non configure' });
+    if (clientStatus !== 'connected') return res.status(503).json({ error: 'WhatsApp non connecte' });
     try {
         await client.sendMessage(groupId, message);
-        console.log('Message envoyé au groupe avec succès !');
-        return res.status(200).json({ success: true });
-    } catch (error) {
-        console.error('Erreur lors de l\'envoi du message:', error);
-        return res.status(500).json({ error: 'Échec de l\'envoi' });
+        console.log('Message envoye au groupe');
+        return res.json({ success: true });
+    } catch (err) {
+        console.error('Erreur envoi:', err);
+        return res.status(500).json({ error: 'Echec de l envoi' });
     }
 });
 
-app.get('/status', (req, res) => {
-    res.json({ status: clientStatus, hasQr: !!qrCodeData });
+app.listen(PORT, function () {
+    console.log('SheetPulse demarre sur http://localhost:' + PORT);
+    console.log('Lancement de WhatsApp...');
+    client.initialize();
 });
 
-client.initialize();
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Serveur démarré sur le port ${PORT}`);
-});
-
-process.on('uncaughtException', (err) => {
-    console.error('Erreur non rattrapée:', err);
+process.on('uncaughtException', function (err) {
+    console.error('Erreur:', err.message);
 });

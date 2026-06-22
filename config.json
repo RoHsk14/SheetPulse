@@ -1,0 +1,7 @@
+{
+  "groupId": "test@g.us",
+  "columns": {
+    "id": 1,
+    "client": 2
+  }
+}
