@@ -18,6 +18,7 @@ app.use(express.json());
 
 let config = loadConfig();
 let qrCodeData = null;
+let pairingCodeData = null;
 let clientStatus = 'initializing';
 
 function generateAppsScript(baseUrl, cols) {
@@ -77,6 +78,18 @@ app.get('/', function (req, res) {
             + (config.groupId ? '<p class="mt-6 text-sm text-gray-400">Groupe cible : <span class="font-mono text-gray-600">' + config.groupId + '</span></p>' : '')
             + '</div>'
         ));
+    } else if (clientStatus === 'awaiting_scan' && pairingCodeData) {
+        res.send(baseHtml('Dashboard',
+            '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
+            + '<div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">'
+            + '<svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg></div>'
+            + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Code de couplage</h1>'
+            + '<p class="text-gray-500 mb-4">WhatsApp > Appareils connectes > Connecter un appareil</p>'
+            + '<div class="bg-gray-100 rounded-lg p-6 mb-4 inline-block">'
+            + '<span class="text-3xl font-bold font-mono tracking-widest text-gray-800">' + pairingCodeData + '</span></div>'
+            + '<p class="text-sm text-gray-400">Saisis ce code dans WhatsApp pour connecter</p>'
+            + '</div>'
+        ));
     } else if (qrCodeData) {
         QRCode.toDataURL(qrCodeData, function (err, url) {
             if (err) return res.status(500).send('Erreur');
@@ -85,8 +98,30 @@ app.get('/', function (req, res) {
                 + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Scannez le QR code</h1>'
                 + '<p class="text-gray-500 mb-6">Ouvrez WhatsApp > Appareils connectes > Connecter un appareil</p>'
                 + '<img src="' + url + '" alt="QR Code" class="w-64 h-64 mx-auto rounded-lg border p-2"/>'
-                + '<p class="mt-4 text-sm text-gray-400">Scannez avec votre telephone</p>'
                 + '</div>'
+                + '<div class="bg-white rounded-xl shadow-sm border p-8 mt-6 text-center">'
+                + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Alternative : code de couplage</h2>'
+                + '<p class="text-sm text-gray-500 mb-4">Si le QR ne marche pas, entre ton numero pour recevoir un code</p>'
+                + '<form id="pairingForm" class="flex gap-2 max-w-md mx-auto">'
+                + '<input type="tel" name="phone" placeholder="229XXXXXXXX" required'
+                + ' class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
+                + '<button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">Envoyer</button></form>'
+                + '<p id="pairingError" class="mt-2 text-sm text-red-500 hidden"></p>'
+                + '</div>'
+                + '<script>'
+                + 'document.getElementById("pairingForm").addEventListener("submit", async function(e){'
+                + '  e.preventDefault();'
+                + '  var phone = e.target.phone.value;'
+                + '  var btn = e.target.querySelector("button");'
+                + '  btn.disabled = true; btn.textContent = "Envoi...";'
+                + '  try {'
+                + '    var r = await fetch("/api/pairing", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({phone: phone}) });'
+                + '    if (r.ok) { location.reload(); }'
+                + '    else { var err = await r.json(); document.getElementById("pairingError").textContent = err.error; document.getElementById("pairingError").classList.remove("hidden"); }'
+                + '  } catch(e) { document.getElementById("pairingError").textContent = "Erreur reseau"; document.getElementById("pairingError").classList.remove("hidden"); }'
+                + '  btn.disabled = false; btn.textContent = "Envoyer";'
+                + '});'
+                + '</script>'
             ));
         });
     } else {
@@ -193,8 +228,19 @@ app.get('/api/config', function (req, res) {
     res.json(config);
 });
 
+app.post('/api/pairing', async function (req, res) {
+    var phone = req.body.phone;
+    if (!phone) return res.status(400).json({ error: 'Numero requis' });
+    try {
+        var code = await client.requestCode(phone);
+        res.json({ success: true, code: code });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/status', function (req, res) {
-    res.json({ status: clientStatus, hasQr: !!qrCodeData });
+    res.json({ status: clientStatus, hasQr: !!qrCodeData, hasPairing: !!pairingCodeData });
 });
 
 var PORT = process.env.PORT || 3000;
@@ -218,12 +264,21 @@ var client = new Client({
 
 client.on('qr', function (qr) {
     qrCodeData = qr;
+    pairingCodeData = null;
     clientStatus = 'awaiting_scan';
     console.log('QR code genere - http://localhost:' + PORT + ' pour scanner');
 });
 
+client.on('pairing_code', function (code) {
+    pairingCodeData = code;
+    qrCodeData = null;
+    clientStatus = 'awaiting_scan';
+    console.log('Code de couplage genere:', code);
+});
+
 client.on('ready', function () {
     qrCodeData = null;
+    pairingCodeData = null;
     clientStatus = 'connected';
     console.log('WhatsApp connecte !');
 });
