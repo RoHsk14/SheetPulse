@@ -87,9 +87,10 @@ app.get('/', function (req, res) {
             + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Code de couplage</h1>'
             + '<p class="text-gray-500 mb-4">WhatsApp > Appareils connectes > Connecter un appareil</p>'
             + '<div class="bg-gray-100 rounded-lg p-6 mb-4 inline-block">'
-            + '<span class="text-3xl font-bold font-mono tracking-widest text-gray-800">' + pairingCodeData + '</span></div>'
+            + '<span class="text-3xl font-bold font-mono tracking-widest text-gray-800" id="pairingCodeDisplay">' + pairingCodeData + '</span></div>'
             + '<p class="text-sm text-gray-400">Saisis ce code dans WhatsApp pour connecter</p>'
             + '</div>'
+            + '<script>setInterval(function(){ location.reload(); }, 3000);</script>'
         ));
     } else if (qrCodeData) {
         res.send(baseHtml('Dashboard',
@@ -234,17 +235,22 @@ app.post('/api/pairing', async function (req, res) {
     if (clientStatus === 'connected') return res.status(400).json({ error: 'Deja connecte' });
     try {
         console.log('Demande de code de couplage pour:', phone);
-        var code = await client.requestPairingCode(phone);
-        pairingCodeData = code;
-        qrCodeData = null;
-        clientStatus = 'awaiting_scan';
-        console.log('Code de couplage genere:', code);
-        console.log('Saisis ce code dans WhatsApp > Appareils connectes > Connecter un appareil');
-        res.json({ success: true, code: code });
-    } catch (err) {
-        console.error('Erreur pairing:', err);
-        res.status(500).json({ error: err.message });
-    }
+        await client.destroy();
+    } catch (_) {}
+    qrCodeData = null;
+    pairingCodeData = null;
+    clientStatus = 'initializing';
+    client = new Client({
+        authStrategy: new LocalAuth(),
+        puppeteer: {
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process']
+        },
+        pairWithPhoneNumber: { phoneNumber: phone }
+    });
+    attachClientEvents();
+    client.initialize();
+    res.json({ success: true, message: 'Code de couplage envoye a WhatsApp', code: 'En attente...' });
 });
 
 app.get('/qr-image', function (req, res) {
@@ -264,6 +270,38 @@ app.get('/status', function (req, res) {
 
 var PORT = process.env.PORT || 3000;
 
+function attachClientEvents() {
+    client.on('qr', function (qr) {
+        qrCodeData = qr;
+        pairingCodeData = null;
+        clientStatus = 'awaiting_scan';
+        console.log('--- SCANNEZ LE QR CODE CI-DESSOUS AVEC WHATSAPP ---');
+        qrcode.generate(qr, { small: true });
+        console.log('Ou ouvrez http://localhost:' + PORT + ' pour le voir sur une page web');
+    });
+
+    client.on('code', function (code) {
+        pairingCodeData = code;
+        qrCodeData = null;
+        clientStatus = 'awaiting_scan';
+        console.log('--- CODE DE COUPLAGE ---');
+        console.log('Code:', code);
+        console.log('Saisis ce code dans WhatsApp > Appareils connectes');
+    });
+
+    client.on('ready', function () {
+        qrCodeData = null;
+        pairingCodeData = null;
+        clientStatus = 'connected';
+        console.log('WhatsApp connecte !');
+    });
+
+    client.on('disconnected', function (reason) {
+        clientStatus = 'disconnected';
+        console.log('WhatsApp deconnecte:', reason);
+    });
+}
+
 var client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -281,26 +319,7 @@ var client = new Client({
     }
 });
 
-client.on('qr', function (qr) {
-    qrCodeData = qr;
-    pairingCodeData = null;
-    clientStatus = 'awaiting_scan';
-    console.log('--- SCANNEZ LE QR CODE CI-DESSOUS AVEC WHATSAPP ---');
-    qrcode.generate(qr, { small: true });
-    console.log('Ou ouvrez http://localhost:' + PORT + ' pour le voir sur une page web');
-});
-
-client.on('ready', function () {
-    qrCodeData = null;
-    pairingCodeData = null;
-    clientStatus = 'connected';
-    console.log('WhatsApp connecte !');
-});
-
-client.on('disconnected', function (reason) {
-    clientStatus = 'disconnected';
-    console.log('WhatsApp deconnecte:', reason);
-});
+attachClientEvents();
 
 app.post('/webhook', async function (req, res) {
     var message = req.body.message;
