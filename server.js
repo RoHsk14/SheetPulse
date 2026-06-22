@@ -228,16 +228,26 @@ app.get('/integration', function (req, res) {
     ));
 });
 
+async function getGroupsFromPage(page) {
+    return await page.evaluate(function() {
+        var chats = window.require('WAWebCollections').Chat.getModelsArray();
+        return chats.filter(function(c) { return c.groupMetadata; }).map(function(c) {
+            return { id: c.id._serialized, name: c.formattedTitle || c.name || c.id._serialized };
+        });
+    });
+}
+
 app.get('/api/groups', async function (req, res) {
     if (clientStatus !== 'connected') return res.status(503).json({ error: 'WhatsApp non connecte' });
     try {
         console.log('Chargement des groupes...');
-        var groups = await client.pupPage.evaluate(function() {
-            var chats = window.require('WAWebCollections').Chat.getModelsArray();
-            return chats.filter(function(c) { return c.groupMetadata; }).map(function(c) {
-                return { id: c.id._serialized, name: c.formattedTitle || c.name || c.id._serialized };
-            });
-        });
+        var groups;
+        try {
+            groups = await getGroupsFromPage(client.pupPage);
+        } catch (_) {
+            await new Promise(function(r) { setTimeout(r, 1000); });
+            groups = await getGroupsFromPage(client.pupPage);
+        }
         console.log('Groupes trouves:', groups.length);
         if (groups.length > 0) {
             console.log('--- LISTE DES GROUPES ---');
@@ -245,7 +255,7 @@ app.get('/api/groups', async function (req, res) {
         }
         res.json(groups);
     } catch (err) {
-        console.error('Erreur chargement groupes:', err);
+        console.error('Erreur chargement groupes:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -328,12 +338,12 @@ function attachClientEvents() {
         clientStatus = 'connected';
         console.log('WhatsApp connecte !');
         try {
-            var groups = await client.pupPage.evaluate(function() {
-                var chats = window.require('WAWebCollections').Chat.getModelsArray();
-                return chats.filter(function(c) { return c.groupMetadata; }).map(function(c) {
-                    return { id: c.id._serialized, name: c.formattedTitle || c.name || c.id._serialized };
-                });
-            });
+            var groups;
+            try { groups = await getGroupsFromPage(client.pupPage); }
+            catch (_) {
+                await new Promise(function(r) { setTimeout(r, 1000); });
+                groups = await getGroupsFromPage(client.pupPage);
+            }
             if (groups.length > 0) {
                 console.log('--- LISTE DES GROUPES ---');
                 groups.forEach(function(g) { console.log('Nom: ' + g.name + ' | ID: ' + g.id); });
