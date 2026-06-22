@@ -8,7 +8,7 @@ const CONFIG_PATH = './config.json';
 
 function loadConfig() {
     try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); }
-    catch { return { groupId: '', columns: {} }; }
+    catch { return { groupId: '' }; }
 }
 function saveConfig(config) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
@@ -22,15 +22,15 @@ let qrCodeData = null;
 let pairingCodeData = null;
 let clientStatus = 'initializing';
 
-function generateAppsScript(baseUrl, cols) {
+function generateAppsScript(baseUrl) {
     return [
         'function onEdit(e) {',
         '  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();',
         '  var lastRow = sheet.getLastRow();',
-        '  var id = sheet.getRange(lastRow, ' + (cols.id || 1) + ').getValue();',
-        '  var client = sheet.getRange(lastRow, ' + (cols.client || 2) + ').getValue();',
-        '  var produits = sheet.getRange(lastRow, ' + (cols.produits || 3) + ').getValue();',
-        '  var total = sheet.getRange(lastRow, ' + (cols.total || 4) + ').getValue();',
+        '  var id = sheet.getRange(lastRow, 1).getValue();',
+        '  var client = sheet.getRange(lastRow, 2).getValue();',
+        '  var produits = sheet.getRange(lastRow, 3).getValue();',
+        '  var total = sheet.getRange(lastRow, 4).getValue();',
         '  if (!id) return;',
         '  var msg = "📦 *NOUVELLE COMMANDE* 📦\\n\\n"',
         '    + "• ID : " + id + "\\n"',
@@ -38,12 +38,8 @@ function generateAppsScript(baseUrl, cols) {
         '    + "• Commande : " + produits + "\\n"',
         '    + "• Total : " + total + " FCFA\\n\\n"',
         '    + "⚡ À traiter rapidement !";',
-        '  var opts = {',
-        '    method: "post",',
-        '    contentType: "application/json",',
-        '    payload: JSON.stringify({ message: msg }),',
-        '    muteHttpExceptions: true',
-        '  };',
+        '  var opts = { method: "post", contentType: "application/json",',
+        '    payload: JSON.stringify({ message: msg }), muteHttpExceptions: true };',
         '  UrlFetchApp.fetch("' + baseUrl + '/webhook", opts);',
         '}'
     ].join('\n');
@@ -102,7 +98,7 @@ app.get('/', function (req, res) {
             + '</div>'
             + '<div class="bg-white rounded-xl shadow-sm border p-8 mt-6 text-center">'
             + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Alternative : code de couplage</h2>'
-            + '<p class="text-sm text-gray-500 mb-4">Si le QR ne marche pas, entre ton numero pour recevoir un code</p>'
+            + '<p class="text-sm text-gray-500 mb-4">Si le QR ne marche pas, entrez votre numero(Sans le + ou  le 00) pour recevoir un code</p>'
             + '<form id="pairingForm" class="flex gap-2 max-w-md mx-auto">'
             + '<input type="tel" name="phone" placeholder="229XXXXXXXX" required'
             + ' class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
@@ -132,7 +128,7 @@ app.get('/', function (req, res) {
             + '<div class="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">'
             + '<svg class="w-8 h-8 text-yellow-600 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></div>'
             + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Initialisation en cours...</h1>'
-            + '<p class="text-gray-500">Preparation de WhatsApp, veuillez patienter.</p>'
+            + '<p class="text-gray-500">Preparation de WhatsApp, veuillez patienter quelques instants.</p>'
             + '<p class="mt-4 text-sm text-gray-400">La page se recharge automatiquement.</p></div>'
             + '<script>setTimeout(function(){ location.reload(); }, 3000);</script>'
         ));
@@ -140,43 +136,42 @@ app.get('/', function (req, res) {
 });
 
 app.get('/config', function (req, res) {
-    var c = config.columns || {};
-    var fields = [
-        { key: 'id', label: 'ID commande', ph: '1' },
-        { key: 'client', label: 'Nom client', ph: '2' },
-        { key: 'produits', label: 'Produits commandes', ph: '3' },
-        { key: 'total', label: 'Total (FCFA)', ph: '4' },
-        { key: 'statut', label: 'Statut', ph: '5' }
-    ];
-    var inputs = fields.map(function (f) {
-        return '<div><label class="block text-sm font-medium text-gray-700 mb-1">' + f.label + '</label>'
-            + '<input type="number" name="col_' + f.key + '" value="' + (c[f.key] || '') + '" placeholder="' + f.ph + '"'
-            + ' class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></div>';
-    }).join('');
-
+    var selected = config.groupId || '';
     res.send(baseHtml('Configuration',
         '<h1 class="text-2xl font-bold text-gray-800 mb-6">Configuration</h1>'
         + '<form id="configForm" class="space-y-6">'
         + '<div class="bg-white rounded-xl shadow-sm border p-6">'
         + '<h2 class="text-lg font-semibold text-gray-800 mb-4">Groupe WhatsApp</h2>'
-        + '<label class="block text-sm font-medium text-gray-700 mb-1">ID du groupe</label>'
-        + '<input type="text" name="groupId" value="' + (config.groupId || '') + '" placeholder="120363430608871862@g.us"'
-        + ' class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm">'
-        + '<p class="mt-1 text-sm text-gray-400">L ID qui termine par <span class="font-mono">@g.us</span></p></div>'
-        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
-        + '<h2 class="text-lg font-semibold text-gray-800 mb-4">Mapping des colonnes</h2>'
-        + '<p class="text-sm text-gray-500 mb-4">Indique le numero de chaque colonne (A=1, B=2, C=3...).</p>'
-        + '<div class="grid grid-cols-2 gap-4">' + inputs + '</div></div>'
+        + '<label class="block text-sm font-medium text-gray-700 mb-1">Choix du groupe</label>'
+        + '<select name="groupId" id="groupSelect" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"'
+        + (clientStatus !== 'connected' ? ' disabled' : '') + '>'
+        + (clientStatus === 'connected'
+            ? '<option value="">Chargement des groupes...</option>'
+            : '<option value="">Connecte d abord WhatsApp pour voir tes groupes</option>')
+        + '</select>'
+        + '<p id="groupStatus" class="mt-1 text-sm text-gray-400">'
+        + (clientStatus === 'connected' ? 'Chargement en cours...' : 'WhatsApp non connecte')
+        + '</p></div>'
         + '<button type="submit" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Enregistrer</button></form>'
         + '<div id="toast" class="hidden fixed bottom-4 right-4 px-6 py-3 bg-green-600 text-white rounded-lg shadow-lg"></div>'
         + '<script>'
+        + (clientStatus === 'connected' ? (
+            'fetch("/api/groups").then(function(r){ return r.json(); }).then(function(groups){'
+            + '  var sel = document.getElementById("groupSelect");'
+            + '  sel.innerHTML = "<option value=\"\">-- Selectionne un groupe --</option>";'
+            + '  groups.forEach(function(g){'
+            + '    var opt = document.createElement("option");'
+            + '    opt.value = g.id;'
+            + '    opt.textContent = g.name + " (" + g.id + ")";'
+            + '    if (g.id === "' + selected + '") opt.selected = true;'
+            + '    sel.appendChild(opt);'
+            + '  });'
+            + '  document.getElementById("groupStatus").textContent = groups.length + " groupe(s) trouve(s)";'
+            + '}).catch(function(){ document.getElementById("groupStatus").textContent = "Erreur chargement groupes"; });'
+        ) : '')
         + 'document.getElementById("configForm").addEventListener("submit", async function(e){'
         + '  e.preventDefault();'
-        + '  var fd = new FormData(e.target);'
-        + '  var data = { groupId: fd.get("groupId"), columns: {} };'
-        + '  for (var pair of fd.entries()) {'
-        + '    if (pair[0].startsWith("col_")) data.columns[pair[0].replace("col_", "")] = parseInt(pair[1]);'
-        + '  }'
+        + '  var data = { groupId: document.getElementById("groupSelect").value };'
         + '  var r = await fetch("/api/config", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(data) });'
         + '  if (r.ok) {'
         + '    var t = document.getElementById("toast");'
@@ -191,7 +186,7 @@ app.get('/config', function (req, res) {
 
 app.get('/integration', function (req, res) {
     var baseUrl = 'http://localhost:' + (process.env.PORT || 3000);
-    var scriptCode = generateAppsScript(baseUrl, config.columns);
+    var scriptCode = generateAppsScript(baseUrl);
 
     res.send(baseHtml('Integration',
         '<h1 class="text-2xl font-bold text-gray-800 mb-6">Integration Google Sheets</h1>'
@@ -218,10 +213,22 @@ app.get('/integration', function (req, res) {
     ));
 });
 
+app.get('/api/groups', async function (req, res) {
+    if (clientStatus !== 'connected') return res.status(503).json({ error: 'WhatsApp non connecte' });
+    try {
+        var chats = await client.getChats();
+        var groups = chats.filter(function(c) { return c.isGroup; }).map(function(g) {
+            return { id: g.id._serialized, name: g.name };
+        });
+        res.json(groups);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/config', function (req, res) {
     var data = req.body;
     if (data.groupId) config.groupId = data.groupId;
-    if (data.columns) config.columns = data.columns;
     saveConfig(config);
     res.json({ success: true });
 });
