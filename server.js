@@ -27,17 +27,25 @@ function generateAppsScript(baseUrl) {
         'function onEdit(e) {',
         '  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();',
         '  var lastRow = sheet.getLastRow();',
-        '  var id = sheet.getRange(lastRow, 1).getValue();',
+        '  var date = sheet.getRange(lastRow, 1).getValue();',
         '  var client = sheet.getRange(lastRow, 2).getValue();',
-        '  var produits = sheet.getRange(lastRow, 3).getValue();',
-        '  var total = sheet.getRange(lastRow, 4).getValue();',
-        '  if (!id) return;',
+        '  var tel = sheet.getRange(lastRow, 3).getValue();',
+        '  var adresse = sheet.getRange(lastRow, 4).getValue();',
+        '  var quartier = sheet.getRange(lastRow, 5).getValue();',
+        '  var produit = sheet.getRange(lastRow, 6).getValue();',
+        '  var qte = sheet.getRange(lastRow, 7).getValue();',
+        '  var total = sheet.getRange(lastRow, 8).getValue();',
+        '  var devise = sheet.getRange(lastRow, 9).getValue() || "FCFA";',
+        '  var statut = sheet.getRange(lastRow, 10).getValue() || "En attente";',
+        '  if (!client) return;',
         '  var msg = "📦 *NOUVELLE COMMANDE* 📦\\n\\n"',
-        '    + "• ID : " + id + "\\n"',
-        '    + "• Client : " + client + "\\n"',
-        '    + "• Commande : " + produits + "\\n"',
-        '    + "• Total : " + total + " FCFA\\n\\n"',
-        '    + "⚡ À traiter rapidement !";',
+        '    + "*Client :* " + client + "\\n"',
+        '    + "*Tel :* " + tel + "\\n"',
+        '    + "*Adresse :* " + adresse + " (" + quartier + ")\\n"',
+        '    + "*Produit :* " + produit + " x" + qte + "\\n"',
+        '    + "*Total :* " + total + " " + devise + "\\n"',
+        '    + "*Statut :* " + statut + "\\n\\n"',
+        '    + "⚡ _Commande du " + date + "_";',
         '  var opts = { method: "post", contentType: "application/json",',
         '    payload: JSON.stringify({ message: msg }), muteHttpExceptions: true };',
         '  UrlFetchApp.fetch("' + baseUrl + '/webhook", opts);',
@@ -213,7 +221,7 @@ app.get('/integration', function (req, res) {
         + '<button onclick="navigator.clipboard.writeText(\'' + baseUrl + '/webhook\')" class="px-4 py-2 bg-gray-100 border rounded-lg hover:bg-gray-200 text-sm">Copier</button></div></div>'
         + '<div class="bg-white rounded-xl shadow-sm border p-6">'
         + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Structure du Google Sheet</h2>'
-        + '<p class="text-sm text-gray-500 mb-4">Tes colonnes doivent etre organisees dans cet ordre :</p>'
+        + '<p class="text-sm text-gray-500 mb-4">Structure attendue de ton Google Sheet :</p>'
         + '<div class="overflow-x-auto"><table class="w-full text-sm border-collapse">'
         + '<thead><tr class="bg-gray-100">'
         + '<th class="px-4 py-2 border text-left font-medium text-gray-700">Colonne</th>'
@@ -221,19 +229,26 @@ app.get('/integration', function (req, res) {
         + '<th class="px-4 py-2 border text-left font-medium text-gray-700">B</th>'
         + '<th class="px-4 py-2 border text-left font-medium text-gray-700">C</th>'
         + '<th class="px-4 py-2 border text-left font-medium text-gray-700">D</th>'
+        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">E</th>'
+        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">F</th>'
+        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">G</th>'
+        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">H</th>'
+        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">I</th>'
+        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">J</th>'
         + '</tr></thead><tbody>'
         + '<tr><td class="px-4 py-2 border font-medium text-gray-600">Contenu</td>'
-        + '<td class="px-4 py-2 border">ID commande</td>'
+        + '<td class="px-4 py-2 border">Date</td>'
         + '<td class="px-4 py-2 border">Nom client</td>'
-        + '<td class="px-4 py-2 border">Produits commandes</td>'
-        + '<td class="px-4 py-2 border">Total (FCFA)</td></tr>'
-        + '<tr class="bg-gray-50"><td class="px-4 py-2 border font-medium text-gray-600">Exemple</td>'
-        + '<td class="px-4 py-2 border font-mono text-xs">CMD-001</td>'
-        + '<td class="px-4 py-2 border font-mono text-xs">Jean Dupont</td>'
-        + '<td class="px-4 py-2 border font-mono text-xs">3x T-shirt, 2x Jeans</td>'
-        + '<td class="px-4 py-2 border font-mono text-xs">25 500</td></tr>'
+        + '<td class="px-4 py-2 border">Telephone</td>'
+        + '<td class="px-4 py-2 border">Adresse</td>'
+        + '<td class="px-4 py-2 border">Quartier</td>'
+        + '<td class="px-4 py-2 border">Produit</td>'
+        + '<td class="px-4 py-2 border">Quantite</td>'
+        + '<td class="px-4 py-2 border">Total</td>'
+        + '<td class="px-4 py-2 border">Devise</td>'
+        + '<td class="px-4 py-2 border">Statut</td></tr>'
         + '</tbody></table></div>'
-        + '<p class="mt-2 text-sm text-gray-400">La ligne 1 est ignoree (en-tete). Les commandes commencent a la ligne 2.</p>'
+        + '<p class="mt-2 text-sm text-gray-400">Ligne 1 = en-tetes. Les donnees commencent a la ligne 2.</p>'
         + '</div>'
         + '<div class="bg-white rounded-xl shadow-sm border p-6">'
         + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Apps Script a copier</h2>'
