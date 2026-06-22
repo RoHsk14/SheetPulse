@@ -232,7 +232,11 @@ app.post('/api/pairing', async function (req, res) {
     var phone = req.body.phone;
     if (!phone) return res.status(400).json({ error: 'Numero requis' });
     try {
-        var code = await client.requestCode(phone);
+        var code = await client.requestPairingCode(phone);
+        pairingCodeData = code;
+        qrCodeData = null;
+        clientStatus = 'awaiting_scan';
+        console.log('Code de couplage genere:', code);
         res.json({ success: true, code: code });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -267,13 +271,6 @@ client.on('qr', function (qr) {
     pairingCodeData = null;
     clientStatus = 'awaiting_scan';
     console.log('QR code genere - http://localhost:' + PORT + ' pour scanner');
-});
-
-client.on('pairing_code', function (code) {
-    pairingCodeData = code;
-    qrCodeData = null;
-    clientStatus = 'awaiting_scan';
-    console.log('Code de couplage genere:', code);
 });
 
 client.on('ready', function () {
