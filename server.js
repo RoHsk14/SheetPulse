@@ -1,4 +1,5 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const express = require('express');
 const fs = require('fs');
@@ -231,14 +232,18 @@ app.get('/api/config', function (req, res) {
 app.post('/api/pairing', async function (req, res) {
     var phone = req.body.phone;
     if (!phone) return res.status(400).json({ error: 'Numero requis' });
+    if (clientStatus === 'connected') return res.status(400).json({ error: 'Deja connecte' });
     try {
+        console.log('Demande de code de couplage pour:', phone);
         var code = await client.requestPairingCode(phone);
         pairingCodeData = code;
         qrCodeData = null;
         clientStatus = 'awaiting_scan';
         console.log('Code de couplage genere:', code);
+        console.log('Saisis ce code dans WhatsApp > Appareils connectes > Connecter un appareil');
         res.json({ success: true, code: code });
     } catch (err) {
+        console.error('Erreur pairing:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -270,7 +275,9 @@ client.on('qr', function (qr) {
     qrCodeData = qr;
     pairingCodeData = null;
     clientStatus = 'awaiting_scan';
-    console.log('QR code genere - http://localhost:' + PORT + ' pour scanner');
+    console.log('--- SCANNEZ LE QR CODE CI-DESSOUS AVEC WHATSAPP ---');
+    qrcode.generate(qr, { small: true });
+    console.log('Ou ouvrez http://localhost:' + PORT + ' pour le voir sur une page web');
 });
 
 client.on('ready', function () {
