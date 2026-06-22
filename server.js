@@ -92,39 +92,38 @@ app.get('/', function (req, res) {
             + '</div>'
         ));
     } else if (qrCodeData) {
-        QRCode.toDataURL(qrCodeData, function (err, url) {
-            if (err) return res.status(500).send('Erreur');
-            res.send(baseHtml('Dashboard',
-                '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
-                + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Scannez le QR code</h1>'
-                + '<p class="text-gray-500 mb-6">Ouvrez WhatsApp > Appareils connectes > Connecter un appareil</p>'
-                + '<img src="' + url + '" alt="QR Code" class="w-64 h-64 mx-auto rounded-lg border p-2"/>'
-                + '</div>'
-                + '<div class="bg-white rounded-xl shadow-sm border p-8 mt-6 text-center">'
-                + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Alternative : code de couplage</h2>'
-                + '<p class="text-sm text-gray-500 mb-4">Si le QR ne marche pas, entre ton numero pour recevoir un code</p>'
-                + '<form id="pairingForm" class="flex gap-2 max-w-md mx-auto">'
-                + '<input type="tel" name="phone" placeholder="229XXXXXXXX" required'
-                + ' class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
-                + '<button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">Envoyer</button></form>'
-                + '<p id="pairingError" class="mt-2 text-sm text-red-500 hidden"></p>'
-                + '</div>'
-                + '<script>'
-                + 'document.getElementById("pairingForm").addEventListener("submit", async function(e){'
-                + '  e.preventDefault();'
-                + '  var phone = e.target.phone.value;'
-                + '  var btn = e.target.querySelector("button");'
-                + '  btn.disabled = true; btn.textContent = "Envoi...";'
-                + '  try {'
-                + '    var r = await fetch("/api/pairing", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({phone: phone}) });'
-                + '    if (r.ok) { location.reload(); }'
-                + '    else { var err = await r.json(); document.getElementById("pairingError").textContent = err.error; document.getElementById("pairingError").classList.remove("hidden"); }'
-                + '  } catch(e) { document.getElementById("pairingError").textContent = "Erreur reseau"; document.getElementById("pairingError").classList.remove("hidden"); }'
-                + '  btn.disabled = false; btn.textContent = "Envoyer";'
-                + '});'
-                + '</script>'
-            ));
-        });
+        res.send(baseHtml('Dashboard',
+            '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
+            + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Scannez le QR code</h1>'
+            + '<p class="text-gray-500 mb-6">Ouvrez WhatsApp > Appareils connectes > Connecter un appareil</p>'
+            + '<img id="qrImg" src="/qr-image" alt="QR Code" class="w-64 h-64 mx-auto rounded-lg border p-2"/>'
+            + '<p class="mt-4 text-sm text-gray-400">Mise a jour automatique...</p>'
+            + '</div>'
+            + '<div class="bg-white rounded-xl shadow-sm border p-8 mt-6 text-center">'
+            + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Alternative : code de couplage</h2>'
+            + '<p class="text-sm text-gray-500 mb-4">Si le QR ne marche pas, entre ton numero pour recevoir un code</p>'
+            + '<form id="pairingForm" class="flex gap-2 max-w-md mx-auto">'
+            + '<input type="tel" name="phone" placeholder="229XXXXXXXX" required'
+            + ' class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
+            + '<button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">Envoyer</button></form>'
+            + '<p id="pairingError" class="mt-2 text-sm text-red-500 hidden"></p>'
+            + '</div>'
+            + '<script>'
+            + 'setInterval(function(){ document.getElementById("qrImg").src = "/qr-image?" + Date.now(); }, 2000);'
+            + 'document.getElementById("pairingForm").addEventListener("submit", async function(e){'
+            + '  e.preventDefault();'
+            + '  var phone = e.target.phone.value;'
+            + '  var btn = e.target.querySelector("button");'
+            + '  btn.disabled = true; btn.textContent = "Envoi...";'
+            + '  try {'
+            + '    var r = await fetch("/api/pairing", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({phone: phone}) });'
+            + '    if (r.ok) { location.reload(); }'
+            + '    else { var err = await r.json(); document.getElementById("pairingError").textContent = err.error; document.getElementById("pairingError").classList.remove("hidden"); }'
+            + '  } catch(e) { document.getElementById("pairingError").textContent = "Erreur reseau"; document.getElementById("pairingError").classList.remove("hidden"); }'
+            + '  btn.disabled = false; btn.textContent = "Envoyer";'
+            + '});'
+            + '</script>'
+        ));
     } else {
         res.send(baseHtml('Dashboard',
             '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
@@ -246,6 +245,17 @@ app.post('/api/pairing', async function (req, res) {
         console.error('Erreur pairing:', err);
         res.status(500).json({ error: err.message });
     }
+});
+
+app.get('/qr-image', function (req, res) {
+    if (!qrCodeData) return res.status(404).send('Aucun QR');
+    QRCode.toDataURL(qrCodeData, function (err, url) {
+        if (err) return res.status(500).send('Erreur');
+        var base64 = url.replace(/^data:image\/png;base64,/, '');
+        var img = Buffer.from(base64, 'base64');
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+        res.end(img);
+    });
 });
 
 app.get('/status', function (req, res) {
