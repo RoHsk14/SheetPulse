@@ -264,6 +264,7 @@ app.post('/api/pairing', async function (req, res) {
         authStrategy: new LocalAuth(),
         puppeteer: {
             headless: true,
+            protocolTimeout: 120000,
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process']
         },
         pairWithPhoneNumber: { phoneNumber: phone }
@@ -332,6 +333,7 @@ var client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
+        protocolTimeout: 120000,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
