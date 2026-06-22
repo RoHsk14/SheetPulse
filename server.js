@@ -71,7 +71,7 @@ app.get('/', function (req, res) {
             '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
             + '<div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">'
             + '<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></div>'
-            + '<h1 class="text-2xl font-bold text-gray-800 mb-2">WhatsApp connecte</h1>'
+            + '<h1 class="text-2xl font-bold text-gray-800 mb-2">WhatsApp connecté</h1>'
             + '<p class="text-gray-500 mb-6">Le bot est pret a recevoir des commandes.</p>'
             + '<div class="flex justify-center gap-4">'
             + '<a href="/config" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Configurer</a>'
@@ -89,8 +89,8 @@ app.get('/', function (req, res) {
             + '<div class="bg-gray-100 rounded-lg p-6 mb-4 inline-block">'
             + '<span class="text-3xl font-bold font-mono tracking-widest text-gray-800" id="pairingCodeDisplay">' + pairingCodeData + '</span></div>'
             + '<p class="text-sm text-gray-400">Saisis ce code dans WhatsApp pour connecter</p>'
-            + '</div>'
-            + '<script>setInterval(function(){ location.reload(); }, 3000);</script>'
+            + '<p class="mt-4 text-sm text-gray-400">La page se met a jour automatiquement.</p></div>'
+            + '<script>setInterval(function(){ fetch("/status").then(r=>r.json()).then(d=>{if(d.status==="connected")location.reload()}); }, 3000);</script>'
         ));
     } else if (qrCodeData) {
         res.send(baseHtml('Dashboard',
@@ -111,6 +111,7 @@ app.get('/', function (req, res) {
             + '</div>'
             + '<script>'
             + 'setInterval(function(){ document.getElementById("qrImg").src = "/qr-image?" + Date.now(); }, 2000);'
+            + 'setInterval(function(){ fetch("/status").then(r=>r.json()).then(function(d){if(d.status==="connected")location.reload()}); }, 3000);'
             + 'document.getElementById("pairingForm").addEventListener("submit", async function(e){'
             + '  e.preventDefault();'
             + '  var phone = e.target.phone.value;'
@@ -236,7 +237,7 @@ app.post('/api/pairing', async function (req, res) {
     try {
         console.log('Demande de code de couplage pour:', phone);
         await client.destroy();
-    } catch (_) {}
+    } catch (_) { }
     qrCodeData = null;
     pairingCodeData = null;
     clientStatus = 'initializing';
