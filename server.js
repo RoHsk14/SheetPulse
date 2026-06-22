@@ -208,17 +208,26 @@ app.get('/config', function (req, res) {
 });
 
 app.get('/integration', function (req, res) {
-    var baseUrl = 'http://localhost:' + (process.env.PORT || 3000);
+    var baseUrl = process.env.PUBLIC_URL || config.publicUrl || 'http://localhost:' + (process.env.PORT || 3000);
     var scriptCode = generateAppsScript(baseUrl);
 
     res.send(baseHtml('Integration',
         '<h1 class="text-2xl font-bold text-gray-800 mb-6">Integration Google Sheets</h1>'
         + '<div class="space-y-6">'
         + '<div class="bg-white rounded-xl shadow-sm border p-6">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">URL publique du serveur</h2>'
+        + '<p class="text-sm text-gray-500 mb-3">Utilise ton URL ngrok ou Render pour que Google Sheets puisse joindre le serveur.</p>'
+        + '<form id="urlForm" class="flex gap-2">'
+        + '<input type="url" name="publicUrl" value="' + (config.publicUrl || 'https://pacific-shy-primary.ngrok-free.dev') + '" placeholder="https://ton-url.ngrok-free.dev"'
+        + ' class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
+        + '<button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">OK</button></form>'
+        + '<p id="urlSuccess" class="mt-1 text-sm text-green-600 hidden">URL enregistree ✓</p>'
+        + '</div>'
+        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
         + '<h2 class="text-lg font-semibold text-gray-800 mb-2">URL du webhook</h2>'
         + '<div class="flex gap-2">'
-        + '<input type="text" value="' + baseUrl + '/webhook" readonly class="flex-1 px-4 py-2 bg-gray-50 border rounded-lg font-mono text-sm">'
-        + '<button onclick="navigator.clipboard.writeText(\'' + baseUrl + '/webhook\')" class="px-4 py-2 bg-gray-100 border rounded-lg hover:bg-gray-200 text-sm">Copier</button></div></div>'
+        + '<input type="text" id="webhookUrl" value="' + baseUrl + '/webhook" readonly class="flex-1 px-4 py-2 bg-gray-50 border rounded-lg font-mono text-sm">'
+        + '<button onclick="navigator.clipboard.writeText(document.getElementById(\'webhookUrl\').value)" class="px-4 py-2 bg-gray-100 border rounded-lg hover:bg-gray-200 text-sm">Copier</button></div></div>'
         + '<div class="bg-white rounded-xl shadow-sm border p-6">'
         + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Structure du Google Sheet</h2>'
         + '<p class="text-sm text-gray-500 mb-4">Structure attendue de ton Google Sheet :</p>'
@@ -264,6 +273,18 @@ app.get('/integration', function (req, res) {
         + '<li>Supprime le code par defaut et colle le code ci-dessus</li>'
         + '<li>Clique sur <strong>Enregistrer</strong> (icone disquette)</li>'
         + '<li>Ajoute une ligne de commande dans le Sheet → le message sera envoye automatiquement</li></ol></div></div>'
+        + '<script>'
+        + 'document.getElementById("urlForm").addEventListener("submit", async function(e){'
+        + '  e.preventDefault();'
+        + '  var url = e.target.publicUrl.value;'
+        + '  var r = await fetch("/api/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({publicUrl: url}) });'
+        + '  if (r.ok) {'
+        + '    document.getElementById("urlSuccess").classList.remove("hidden");'
+        + '    document.getElementById("webhookUrl").value = url.replace(/\\/$/,"") + "/webhook";'
+        + '    setTimeout(function(){ document.getElementById("urlSuccess").classList.add("hidden"); }, 3000);'
+        + '  }'
+        + '});'
+        + '</script>'
     ));
 });
 
@@ -302,7 +323,8 @@ app.get('/api/groups', async function (req, res) {
 app.post('/api/config', function (req, res) {
     var data = req.body;
     if (data.groupId) config.groupId = data.groupId;
-    saveConfig(config);
+    if (data.publicUrl) config.publicUrl = data.publicUrl;
+    if (data.groupId || data.publicUrl) saveConfig(config);
     res.json({ success: true });
 });
 
