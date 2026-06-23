@@ -3,7 +3,6 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const express = require('express');
 const fs = require('fs');
-const { google } = require('googleapis');
 
 const CONFIG_PATH = './config.json';
 const SA_PATH = './service-account.json';
@@ -19,12 +18,6 @@ function saveConfig(c) {
 
 const app = express();
 app.use(express.json());
-const cors = require('cors');
-app.use(cors({
-  origin: '*',
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization']
-}));
 
 // Global CORS header fallback (ensures headers even on cached responses)
 app.use((req, res, next) => {
@@ -46,6 +39,7 @@ let sheetsService = null;
 
 function initSheets() {
     try {
+        const { google } = require('googleapis');
         var auth;
         var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
         if (envKey) {
