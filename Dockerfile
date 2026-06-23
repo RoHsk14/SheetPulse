@@ -1,35 +1,57 @@
-# Dockerfile for ws-sheets-bot (Render deployment)
-# Base image with Node.js and Debian package manager
+# Dockerfile for ws‑sheets‑bot (Render)
+# Base image: Node 20 slim (Debian based)
 FROM node:20-slim
 
-# Install Google Chrome (stable) and required utilities
+# Install system libs required by Chromium (headless)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        ca-certificates wget gnupg && \
-    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - && \
-    echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends google-chrome-stable && \
-    apt-get purge -y --auto-remove wget gnupg && \
+        ca-certificates \
+        fonts-liberation \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libatk1.0-0 \
+        libc6 \
+        libcairo2 \
+        libcups2 \
+        libdbus-1-3 \
+        libdrm2 \
+        libexpat1 \
+        libgbm1 \
+        libglib2.0-0 \
+        libgtk-3-0 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb1 \
+        libxcomposite1 \
+        libxcursor1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxi6 \
+        libxrandr2 \
+        libxrender1 \
+        libxshmfence1 \
+        libxtst6 && \
     rm -rf /var/lib/apt/lists/*
 
-# Set Puppeteer to use the Chrome binary we installed, skip its own download
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
-ENV PUPPETEER_SKIP_DOWNLOAD=1
+# No PUPPETEER_SKIP_DOWNLOAD – let puppeteer download Chromium during the build
 ENV NODE_ENV=production
 
-# Application work directory
 WORKDIR /app
 
-# Copy package files and install dependencies
+# Copy package manifests and install dependencies (this will download Chromium)
 COPY package*.json ./
 RUN npm ci
 
-# Copy the rest of the source code
+# Copy source code
 COPY . .
 
-# Expose the default port (3000) – can be overridden via $PORT
+# Expose default port (Render will set $PORT)
 EXPOSE 3000
 
-# Start the bot
+# Launch the bot
 CMD ["node", "server.js"]
