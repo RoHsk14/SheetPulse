@@ -46,11 +46,23 @@ let sheetsService = null;
 
 function initSheets() {
     try {
-        if (!fs.existsSync(SA_PATH)) { console.log('service-account.json manquant'); return null; }
-        var auth = new google.auth.GoogleAuth({
-            keyFile: SA_PATH,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets']
-        });
+        var auth;
+        var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+        if (envKey) {
+            var creds = JSON.parse(envKey);
+            auth = new google.auth.JWT(
+                creds.client_email,
+                null,
+                creds.private_key,
+                ['https://www.googleapis.com/auth/spreadsheets']
+            );
+        } else {
+            if (!fs.existsSync(SA_PATH)) { console.log('service-account.json manquant'); return null; }
+            auth = new google.auth.GoogleAuth({
+                keyFile: SA_PATH,
+                scopes: ['https://www.googleapis.com/auth/spreadsheets']
+            });
+        }
         return google.sheets({ version: 'v4', auth: auth });
     } catch (e) { console.log('Erreur init Sheets:', e.message); return null; }
 }
@@ -122,8 +134,11 @@ async function checkSheet() {
 }
 
 function getSaEmail() {
-    try { return JSON.parse(fs.readFileSync(SA_PATH, 'utf8')).client_email; }
-    catch { return 'service account'; }
+    try {
+        var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+        if (envKey) return JSON.parse(envKey).client_email;
+        return JSON.parse(fs.readFileSync(SA_PATH, 'utf8')).client_email;
+    } catch { return 'service account'; }
 }
 
 function startPolling() {
