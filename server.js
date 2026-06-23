@@ -411,7 +411,11 @@ app.get('/qr-image', function (req, res) {
 });
 
 app.get('/debug', function (req, res) {
-    res.json({ clientStatus, hasQr: !!qrCodeData, qrLen: qrCodeData ? qrCodeData.length : 0, hasPairing: !!pairingCodeData, sheetConfigured: !!config.sheetId, config });
+    res.json({ clientStatus, hasQr: !!qrCodeData, qrLen: qrCodeData ? qrCodeData.length : 0, hasPairing: !!pairingCodeData, sheetConfigured: !!config.sheetId, config, commit: process.env.RENDER_GIT_COMMIT || 'local' });
+});
+
+app.get('/version', function (req, res) {
+    res.json({ commit: process.env.RENDER_GIT_COMMIT || 'local' });
 });
 
 app.get('/status', function (req, res) {
