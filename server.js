@@ -3,68 +3,125 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const express = require('express');
 const fs = require('fs');
+const { google } = require('googleapis');
 
 const CONFIG_PATH = './config.json';
+const SA_PATH = './service-account.json';
+const POLL_INTERVAL = 30000;
 
 function loadConfig() {
     try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); }
-    catch { return { groupId: '' }; }
+    catch { return { groupId: '', sheetId: '', publicUrl: '' }; }
 }
-function saveConfig(config) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+function saveConfig(c) {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(c, null, 2));
 }
 
 const app = express();
 app.use(express.json());
+app.use(require('cors')());
 
 let config = loadConfig();
 let qrCodeData = null;
 let pairingCodeData = null;
 let clientStatus = 'initializing';
+let pollTimer = null;
+let sheetsService = null;
 
-function generateAppsScript(baseUrl) {
-    return [
-        'function sheetPulseOnEdit(e) {',
-        '  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();',
-        '  var lastRow = sheet.getLastRow();',
-        '  var date = sheet.getRange(lastRow, 1).getValue();',
-        '  var client = sheet.getRange(lastRow, 2).getValue();',
-        '  var tel = sheet.getRange(lastRow, 3).getValue();',
-        '  var adresse = sheet.getRange(lastRow, 4).getValue();',
-        '  var quartier = sheet.getRange(lastRow, 5).getValue();',
-        '  var produit = sheet.getRange(lastRow, 6).getValue();',
-        '  var qte = sheet.getRange(lastRow, 7).getValue();',
-        '  var total = sheet.getRange(lastRow, 8).getValue();',
-        '  var devise = sheet.getRange(lastRow, 9).getValue() || "FCFA";',
-        '  var statut = sheet.getRange(lastRow, 10).getValue() || "En attente";',
-        '  if (!client) return;',
-        '  var msg = "📦 *NOUVELLE COMMANDE* 📦\\n\\n"',
-        '    + "*Client :* " + client + "\\n"',
-        '    + "*Tel :* " + tel + "\\n"',
-        '    + "*Adresse :* " + adresse + " (" + quartier + ")\\n"',
-        '    + "*Produit :* " + produit + " x" + qte + "\\n"',
-        '    + "*Total :* " + total + " " + devise + "\\n"',
-        '    + "*Statut :* " + statut + "\\n\\n"',
-        '    + "⚡ _Commande du " + date + "_";',
-        '  var opts = { method: "post", contentType: "application/json",',
-        '    payload: JSON.stringify({ message: msg }), muteHttpExceptions: true };',
-        '  UrlFetchApp.fetch("' + baseUrl + '/webhook", opts);',
-        '}',
-        '',
-        'function sheetPulseSetup() {',
-        '  var sheet = SpreadsheetApp.getActiveSpreadsheet();',
-        '  var triggers = ScriptApp.getProjectTriggers();',
-        '  for (var i = 0; i < triggers.length; i++) {',
-        '    if (triggers[i].getHandlerFunction() === "sheetPulseOnEdit") {',
-        '      ScriptApp.deleteTrigger(triggers[i]);',
-        '    }',
-        '  }',
-        '  ScriptApp.newTrigger("sheetPulseOnEdit")',
-        '    .forSpreadsheet(sheet)',
-        '    .onEdit()',
-        '    .create();',
-        '}'
-    ].join('\n');
+function initSheets() {
+    try {
+        if (!fs.existsSync(SA_PATH)) { console.log('service-account.json manquant'); return null; }
+        var auth = new google.auth.GoogleAuth({
+            keyFile: SA_PATH,
+            scopes: ['https://www.googleapis.com/auth/spreadsheets']
+        });
+        return google.sheets({ version: 'v4', auth: auth });
+    } catch (e) { console.log('Erreur init Sheets:', e.message); return null; }
+}
+
+async function checkSheet() {
+    if (clientStatus !== 'connected' || !config.sheetId || !sheetsService) return;
+    try {
+        var res = await sheetsService.spreadsheets.values.get({
+            spreadsheetId: config.sheetId,
+            range: 'A:K',
+            valueRenderOption: 'UNFORMATTED_VALUE'
+        });
+        var rows = res.data.values;
+        if (!rows || rows.length < 2) return;
+
+        var lastRow = config.lastProcessedRow || 1;
+        var newRows = [];
+        for (var i = lastRow; i < rows.length; i++) {
+            if (rows[i] && rows[i][1]) newRows.push({ index: i + 1, data: rows[i] });
+        }
+        if (newRows.length === 0) return;
+
+        for (var n = 0; n < newRows.length; n++) {
+            var r = newRows[n];
+            var row = r.data;
+            var date = row[0] || '';
+            var clientName = row[1] || '';
+            var tel = row[2] || '';
+            var adresse = row[3] || '';
+            var quartier = row[4] || '';
+            var produit = row[5] || '';
+            var qte = row[6] || '';
+            var total = row[7] || '';
+            var devise = row[8] || 'FCFA';
+            var statut = row[9] || 'En attente';
+
+            var msg = '📦 *NOUVELLE COMMANDE* 📦\n\n'
+                + '*Client :* ' + clientName + '\n'
+                + '*Tel :* ' + tel + '\n'
+                + '*Adresse :* ' + adresse + ' (' + quartier + ')\n'
+                + '*Produit :* ' + produit + ' x' + qte + '\n'
+                + '*Total :* ' + total + ' ' + devise + '\n'
+                + '*Statut :* ' + statut + '\n\n'
+                + '⚡ _Commande du ' + date + '_';
+
+            try {
+                await client.sendMessage(config.groupId, msg);
+                console.log('Commande ' + r.index + ' envoyee au groupe');
+            } catch (e) {
+                console.log('Erreur envoi commande ' + r.index + ': ' + e.message);
+            }
+
+            try {
+                await sheetsService.spreadsheets.values.update({
+                    spreadsheetId: config.sheetId,
+                    range: 'J' + r.index,
+                    valueInputOption: 'RAW',
+                    resource: { values: [['Envoye']] }
+                });
+            } catch (_) {}
+        }
+        config.lastProcessedRow = rows.length;
+        saveConfig(config);
+    } catch (e) {
+        if (e.code === 404) { console.log('Sheet introuvable, verifie l ID'); }
+        else if (e.code === 403) { console.log('Acces refuse. Partage le sheet avec ' + getSaEmail()); }
+        else { console.log('Erreur lecture sheet:', e.message); }
+    }
+}
+
+function getSaEmail() {
+    try { return JSON.parse(fs.readFileSync(SA_PATH, 'utf8')).client_email; }
+    catch { return 'service account'; }
+}
+
+function startPolling() {
+    stopPolling();
+    sheetsService = initSheets();
+    if (sheetsService && config.sheetId) {
+        console.log('Surveillance du sheet demarree (toutes les 30s)');
+        checkSheet();
+        pollTimer = setInterval(checkSheet, POLL_INTERVAL);
+    }
+}
+
+function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
 function baseHtml(title, content) {
@@ -78,24 +135,42 @@ function baseHtml(title, content) {
         + '<div class="flex gap-4 text-sm">'
         + '<a href="/" class="text-gray-600 hover:text-gray-900' + (title === 'Dashboard' ? ' font-semibold text-blue-600' : '') + '">Dashboard</a>'
         + '<a href="/config" class="text-gray-600 hover:text-gray-900' + (title === 'Configuration' ? ' font-semibold text-blue-600' : '') + '">Configuration</a>'
-        + '<a href="/integration" class="text-gray-600 hover:text-gray-900' + (title === 'Integration' ? ' font-semibold text-blue-600' : '') + '">Integration</a>'
         + '</div></div></nav>'
         + '<div class="max-w-5xl mx-auto px-4 py-8">' + content + '</div></body></html>';
 }
 
 app.get('/', function (req, res) {
     if (clientStatus === 'connected') {
+        var saEmail = getSaEmail();
+        var allGood = config.sheetId && config.groupId;
         res.send(baseHtml('Dashboard',
-            '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
-            + '<div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">'
-            + '<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></div>'
-            + '<h1 class="text-2xl font-bold text-gray-800 mb-2">WhatsApp connecté</h1>'
-            + '<p class="text-gray-500 mb-6">Le bot est pret a recevoir des commandes.</p>'
-            + '<div class="flex justify-center gap-4">'
-            + '<a href="/config" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Configurer</a>'
-            + '<a href="/integration" class="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Voir l integration</a></div>'
-            + (config.groupId ? '<p class="mt-6 text-sm text-gray-400">Groupe cible : <span class="font-mono text-gray-600">' + config.groupId + '</span></p>' : '')
-            + '</div>'
+            (allGood
+                ? '<div class="bg-white rounded-xl shadow-sm border-2 border-green-300 p-8 text-center">'
+                + '<div class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">'
+                + '<svg class="w-10 h-10 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>'
+                + '<h1 class="text-2xl font-bold text-green-800 mb-2">✓ Configuration complete</h1>'
+                + '<p class="text-green-700 mb-1">WhatsApp connecte et Google Sheet configure.</p>'
+                + '<p class="text-green-600 text-sm mb-4">Le bot surveille les nouvelles commandes toutes les 30 secondes.</p>'
+                + '<div class="bg-green-50 rounded-lg p-4 text-sm text-green-800 text-left max-w-md mx-auto space-y-1">'
+                + '<p><span class="font-medium">Groupe :</span> <span class="font-mono">' + config.groupId + '</span></p>'
+                + '<p><span class="font-medium">Sheet :</span> <span class="font-mono">' + config.sheetId + '</span></p></div>'
+                + '<div class="mt-6"><a href="/config" class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium">Modifier la configuration</a></div>'
+                + '</div>'
+                : '<div class="bg-white rounded-xl shadow-sm border p-8 text-center">'
+                + '<div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">'
+                + '<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></div>'
+                + '<h1 class="text-2xl font-bold text-gray-800 mb-2">WhatsApp connecte</h1>'
+                + '<p class="text-gray-500 mb-4">WhatsApp est pret, configure le Google Sheet pour commencer.</p>'
+                + '<div class="mt-2 flex justify-center gap-4">'
+                + '<a href="/config" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Configuration</a></div>'
+                + '<div class="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800 text-left">'
+                + '<p class="font-medium mb-1">Pour commencer :</p>'
+                + '<ol class="list-decimal list-inside space-y-1">'
+                + '<li>Va dans <strong>Configuration</strong></li>'
+                + '<li>Entre ton ID de Google Sheet</li>'
+                + '<li>Partage le sheet avec <strong>' + saEmail + '</strong></li>'
+                + '<li>Le bot detectera automatiquement les nouvelles commandes</li></ol></div>'
+                + '</div>')
         ));
     } else if (clientStatus === 'awaiting_scan' && pairingCodeData) {
         res.send(baseHtml('Dashboard',
@@ -120,7 +195,7 @@ app.get('/', function (req, res) {
             + '</div>'
             + '<div class="bg-white rounded-xl shadow-sm border p-8 mt-6 text-center">'
             + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Alternative : code de couplage</h2>'
-            + '<p class="text-sm text-gray-500 mb-4">Si le QR ne marche pas, entrez votre numero(Sans le + ou  le 00) pour recevoir un code</p>'
+            + '<p class="text-sm text-gray-500 mb-4">Si le QR ne marche pas, entre ton numero pour recevoir un code</p>'
             + '<form id="pairingForm" class="flex gap-2 max-w-md mx-auto">'
             + '<input type="tel" name="phone" placeholder="229XXXXXXXX" required'
             + ' class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
@@ -132,11 +207,10 @@ app.get('/', function (req, res) {
             + 'setInterval(function(){ fetch("/status").then(r=>r.json()).then(function(d){if(d.status==="connected")location.reload()}); }, 3000);'
             + 'document.getElementById("pairingForm").addEventListener("submit", async function(e){'
             + '  e.preventDefault();'
-            + '  var phone = e.target.phone.value;'
-            + '  var btn = e.target.querySelector("button");'
+            + '  var phone = e.target.phone.value, btn = e.target.querySelector("button");'
             + '  btn.disabled = true; btn.textContent = "Envoi...";'
             + '  try {'
-            + '    var r = await fetch("/api/pairing", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({phone: phone}) });'
+            + '    var r = await fetch("/api/pairing", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({phone:phone}) });'
             + '    if (r.ok) { location.reload(); }'
             + '    else { var err = await r.json(); document.getElementById("pairingError").textContent = err.error; document.getElementById("pairingError").classList.remove("hidden"); }'
             + '  } catch(e) { document.getElementById("pairingError").textContent = "Erreur reseau"; document.getElementById("pairingError").classList.remove("hidden"); }'
@@ -150,7 +224,7 @@ app.get('/', function (req, res) {
             + '<div class="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">'
             + '<svg class="w-8 h-8 text-yellow-600 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></div>'
             + '<h1 class="text-2xl font-bold text-gray-800 mb-2">Initialisation en cours...</h1>'
-            + '<p class="text-gray-500">Preparation de WhatsApp, veuillez patienter quelques instants.</p>'
+            + '<p class="text-gray-500">Preparation de WhatsApp, veuillez patienter.</p>'
             + '<p class="mt-4 text-sm text-gray-400">La page se recharge automatiquement.</p></div>'
             + '<script>setTimeout(function(){ location.reload(); }, 3000);</script>'
         ));
@@ -158,189 +232,110 @@ app.get('/', function (req, res) {
 });
 
 app.get('/config', function (req, res) {
-    var selected = config.groupId || '';
+    var selectedGroup = config.groupId || '';
+    var saEmail = getSaEmail();
+
     res.send(baseHtml('Configuration',
         '<h1 class="text-2xl font-bold text-gray-800 mb-6">Configuration</h1>'
         + '<form id="configForm" class="space-y-6">'
+
         + '<div class="bg-white rounded-xl shadow-sm border p-6">'
-        + '<h2 class="text-lg font-semibold text-gray-800 mb-4">Groupe WhatsApp</h2>'
-        + '<label class="block text-sm font-medium text-gray-700 mb-1">Choix du groupe</label>'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">1. Groupe WhatsApp</h2>'
         + '<input type="text" id="groupSearch" placeholder="Rechercher un groupe..."'
         + ' class="w-full px-4 py-2 border rounded-lg mb-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"'
         + (clientStatus !== 'connected' ? ' disabled' : '') + '>'
-        + '<select name="groupId" id="groupSelect" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white" size="8"'
+        + '<select name="groupId" id="groupSelect" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white" size="6"'
         + (clientStatus !== 'connected' ? ' disabled' : '') + '>'
         + (clientStatus === 'connected'
             ? '<option value="">Chargement des groupes...</option>'
-            : '<option value="">Connecte d abord WhatsApp pour voir tes groupes</option>')
+            : '<option value="">Connecte WhatsApp d abord</option>')
         + '</select>'
-        + '<input type="hidden" id="selectedGroup" value="' + selected.replace(/"/g, '&quot;') + '">'
         + '<p id="groupStatus" class="mt-1 text-sm text-gray-400">'
-        + (clientStatus === 'connected' ? 'Chargement en cours...' : 'WhatsApp non connecte')
+        + (clientStatus === 'connected' ? 'Chargement...' : 'WhatsApp non connecte')
         + '</p></div>'
-        + '<button type="submit" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Enregistrer</button></form>'
-        + '<div id="toast" class="hidden fixed bottom-4 right-4 px-6 py-3 bg-green-600 text-white rounded-lg shadow-lg"></div>'
-        + '<script>'
-        + (clientStatus === 'connected' ? (
-            'fetch("/api/groups").then(function(r){'
-            + '  if (!r.ok) return r.json().then(function(e){ throw new Error(e.error); });'
-            + '  return r.json();'
-            + '}).then(function(groups){'
-            + '  var sel = document.getElementById("groupSelect"), search = document.getElementById("groupSearch"), selected = document.getElementById("selectedGroup").value;'
-            + '  function renderGroups(filter) {'
-            + '    sel.options.length = 0;'
-            + '    var f = filter ? filter.toLowerCase() : "";'
-            + '    var count = 0;'
-            + '    groups.forEach(function(g){'
-            + '      if (f && g.name.toLowerCase().indexOf(f) === -1 && g.id.toLowerCase().indexOf(f) === -1) return;'
-            + '      var opt = new Option(g.name + " (" + g.id + ")", g.id);'
-            + '      if (g.id === selected) opt.selected = true;'
-            + '      sel.options[sel.options.length] = opt;'
-            + '      count++;'
-            + '    });'
-            + '    document.getElementById("groupStatus").textContent = count + " / " + groups.length + " groupe(s)";'
-            + '  }'
-            + '  search.addEventListener("input", function(){ renderGroups(this.value); });'
-            + '  renderGroups("");'
-            + '  sel.disabled = false;'
-            + '  search.disabled = false;'
-            + '}).catch(function(e){ document.getElementById("groupStatus").textContent = "Erreur: " + e.message; });'
-        ) : '')
-        + 'document.getElementById("configForm").addEventListener("submit", async function(e){'
-        + '  e.preventDefault();'
-        + '  var data = { groupId: document.getElementById("groupSelect").value };'
-        + '  var r = await fetch("/api/config", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(data) });'
-        + '  if (r.ok) {'
-        + '    var t = document.getElementById("toast");'
-        + '    t.textContent = "Configuration enregistree ✓";'
-        + '    t.classList.remove("hidden");'
-        + '    setTimeout(function(){ t.classList.add("hidden"); }, 3000);'
-        + '  }'
-        + '});'
-        + '</script>'
-    ));
-});
 
-app.get('/integration', function (req, res) {
-    var baseUrl = process.env.PUBLIC_URL || config.publicUrl || 'http://localhost:' + (process.env.PORT || 3000);
-    var scriptCode = generateAppsScript(baseUrl);
+                    + '<div class="bg-white rounded-xl shadow-sm border p-6">'
+                    + '<h2 class="text-lg font-semibold text-gray-800 mb-2">2. Google Sheet</h2>'
+                    + '<label class="block text-sm font-medium text-gray-700 mb-1">Lien ou ID du Google Sheet</label>'
+                    + '<input type="text" name="sheetId" value="' + (config.sheetId || '').replace(/"/g, '&quot;') + '"'
+                    + ' placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"'
+                    + ' class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
+                    + '<p class="mt-1 text-sm text-gray-400">Colle le lien complet ou seulement l ID</p>'
+                    + '</div>'
 
-    res.send(baseHtml('Integration',
-        '<h1 class="text-2xl font-bold text-gray-800 mb-6">Integration Google Sheets</h1>'
-        + '<div class="space-y-6">'
-        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
-        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">URL publique du serveur</h2>'
-        + '<p class="text-sm text-gray-500 mb-3">Utilise ton URL ngrok ou Render pour que Google Sheets puisse joindre le serveur.</p>'
-        + '<form id="urlForm" class="flex gap-2">'
-        + '<input type="url" name="publicUrl" value="' + (config.publicUrl || 'https://pacific-shy-primary.ngrok-free.dev') + '" placeholder="https://ton-url.ngrok-free.dev"'
-        + ' class="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
-        + '<button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">OK</button></form>'
-        + '<p id="urlSuccess" class="mt-1 text-sm text-green-600 hidden">URL enregistree ✓</p>'
-        + '</div>'
-        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
-        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">URL du webhook</h2>'
+        + '<div class="bg-white rounded-xl shadow-sm border p-6 bg-blue-50 border-blue-200">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">3. Partager l acces</h2>'
+        + '<p class="text-sm text-gray-600 mb-3">Ajoute cet email comme <strong>editeur</strong> dans ton Google Sheet :</p>'
         + '<div class="flex gap-2">'
-        + '<input type="text" id="webhookUrl" value="' + baseUrl + '/webhook" readonly class="flex-1 px-4 py-2 bg-gray-50 border rounded-lg font-mono text-sm">'
-        + '<button onclick="navigator.clipboard.writeText(document.getElementById(\'webhookUrl\').value)" class="px-4 py-2 bg-gray-100 border rounded-lg hover:bg-gray-200 text-sm">Copier</button></div></div>'
-        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
-        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Structure du Google Sheet</h2>'
-        + '<p class="text-sm text-gray-500 mb-4">Structure attendue de ton Google Sheet :</p>'
-        + '<div class="overflow-x-auto"><table class="w-full text-sm border-collapse">'
-        + '<thead><tr class="bg-gray-100">'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">Colonne</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">A</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">B</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">C</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">D</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">E</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">F</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">G</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">H</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">I</th>'
-        + '<th class="px-4 py-2 border text-left font-medium text-gray-700">J</th>'
-        + '</tr></thead><tbody>'
-        + '<tr><td class="px-4 py-2 border font-medium text-gray-600">Contenu</td>'
-        + '<td class="px-4 py-2 border">Date</td>'
-        + '<td class="px-4 py-2 border">Nom client</td>'
-        + '<td class="px-4 py-2 border">Telephone</td>'
-        + '<td class="px-4 py-2 border">Adresse</td>'
-        + '<td class="px-4 py-2 border">Quartier</td>'
-        + '<td class="px-4 py-2 border">Produit</td>'
-        + '<td class="px-4 py-2 border">Quantite</td>'
-        + '<td class="px-4 py-2 border">Total</td>'
-        + '<td class="px-4 py-2 border">Devise</td>'
-        + '<td class="px-4 py-2 border">Statut</td></tr>'
-        + '</tbody></table></div>'
-        + '<p class="mt-2 text-sm text-gray-400">Ligne 1 = en-tetes. Les donnees commencent a la ligne 2.</p>'
+        + '<input type="text" value="' + saEmail + '" readonly class="flex-1 px-4 py-2 bg-white border rounded-lg font-mono text-sm">'
+        + '<button onclick="navigator.clipboard.writeText(\'' + saEmail + '\')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm whitespace-nowrap">Copier</button></div>'
+        + '<p class="mt-2 text-sm text-gray-500">Va dans ton Sheet > Partager > ajoute cet email en editeur.</p>'
         + '</div>'
-        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
-        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Apps Script a copier</h2>'
-        + '<p class="text-sm text-gray-500 mb-4">Colle ce code dans <span class="font-mono bg-gray-100 px-2 py-0.5 rounded">Extensions > Apps Script</span> sur ton Sheet.</p>'
-        + '<div class="relative">'
-        + '<textarea id="scriptCode" rows="22" readonly class="w-full px-4 py-3 bg-gray-50 border rounded-lg font-mono text-sm">' + scriptCode + '</textarea>'
-        + '<button onclick="navigator.clipboard.writeText(document.getElementById(\'scriptCode\').value)" class="absolute top-2 right-2 px-3 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700">Copier</button></div></div>'
-        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
-        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Instructions</h2>'
-        + '<ol class="list-decimal list-inside space-y-2 text-gray-600">'
-        + '<li>Ouvre ton Google Sheet de commandes</li>'
-        + '<li>Va dans <strong>Extensions > Apps Script</strong></li>'
-        + '<li>Supprime le code par defaut et colle le code ci-dessus</li>'
-        + '<li>Clique sur <strong>Enregistrer</strong> (icone disquette)</li>'
-        + '<li>Dans la liste des fonctions, choisis <strong>sheetPulseSetup</strong> puis clique <strong>Run ▶️</strong></li>'
-        + '<li>Autorise les permissions demandees</li>'
-        + '<li>Une fois le setup fait, ajoute une ligne dans le Sheet → le message sera envoye automatiquement</li></ol></div></div>'
-        + '<script>'
-        + 'document.getElementById("urlForm").addEventListener("submit", async function(e){'
-        + '  e.preventDefault();'
-        + '  var url = e.target.publicUrl.value;'
-        + '  var r = await fetch("/api/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({publicUrl: url}) });'
-        + '  if (r.ok) {'
-        + '    document.getElementById("urlSuccess").classList.remove("hidden");'
-        + '    document.getElementById("webhookUrl").value = url.replace(/\\/$/,"") + "/webhook";'
-        + '    setTimeout(function(){ document.getElementById("urlSuccess").classList.add("hidden"); }, 3000);'
-        + '  }'
-        + '});'
+
+        + '<button type="submit" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Enregistrer</button></form>'
+        + '<div id="toast" class="hidden fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50"></div>'
+
+                    + '<script>'
+                    + (clientStatus === 'connected' ? (
+                        'fetch("/api/groups").then(function(r){'
+                        + '  if (!r.ok) return r.json().then(function(e){ throw new Error(e.error); });'
+                        + '  return r.json();'
+                        + '}).then(function(groups){'
+                        + '  var sel = document.getElementById("groupSelect"), search = document.getElementById("groupSearch");'
+                        + '  var selected = "' + selectedGroup.replace(/"/g, '\\"') + '";'
+                        + '  function render(f){'
+                        + '    sel.options.length = 0;'
+                        + '    var q = f ? f.toLowerCase() : "", c = 0;'
+                        + '    groups.forEach(function(g){'
+                        + '      if (q && g.name.indexOf(q) === -1 && g.id.indexOf(q) === -1) return;'
+                        + '      var opt = new Option(g.name + " (" + g.id + ")", g.id);'
+                        + '      if (g.id === selected) opt.selected = true;'
+                        + '      sel.options[sel.options.length] = opt;'
+                        + '      c++;'
+                        + '    });'
+                        + '    document.getElementById("groupStatus").textContent = c + " / " + groups.length + " groupe(s)";'
+                        + '  }'
+                        + '  search.addEventListener("input", function(){ render(this.value); });'
+                        + '  render("");'
+                        + '  sel.disabled = false; search.disabled = false;'
+                        + '}).catch(function(e){ document.getElementById("groupStatus").textContent = "Erreur: " + e.message; });'
+                    ) : '')
+                    + 'function extractSheetId(v){'
+                    + '  var m = v.match(/\\/spreadsheets\\/d\\/([a-zA-Z0-9_-]+)/);'
+                    + '  return m ? m[1] : v;'
+                    + '}'
+                    + 'document.querySelector("[name=sheetId]").addEventListener("change", function(){'
+                    + '  this.value = extractSheetId(this.value);'
+                    + '});'
+                    + 'document.getElementById("configForm").addEventListener("submit", async function(e){'
+                    + '  e.preventDefault();'
+                    + '  var sheetVal = extractSheetId(document.querySelector("[name=sheetId]").value);'
+                    + '  var data = { groupId: document.getElementById("groupSelect").value, sheetId: sheetVal };'
+                    + '  var r = await fetch("/api/config", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data) });'
+                    + '  if (r.ok) {'
+                    + '    var t = document.getElementById("toast");'
+                    + '    t.className = "fixed bottom-4 right-4 px-6 py-3 bg-green-600 text-white rounded-lg shadow-lg z-50";'
+                    + '    t.innerHTML = "✓ Configuration enregistree ! <a href=\'/\' class=\'underline font-medium\'>Voir le dashboard</a>";'
+                    + '    setTimeout(function(){ t.classList.add("hidden"); }, 6000);'
+                    + '  }'
+                    + '});'
         + '</script>'
     ));
 });
 
-async function getGroupsFromPage(page) {
-    return await page.evaluate(function() {
-        var chats = window.require('WAWebCollections').Chat.getModelsArray();
-        return chats.filter(function(c) { return c.groupMetadata; }).map(function(c) {
-            return { id: c.id._serialized, name: c.formattedTitle || c.name || c.id._serialized };
-        });
-    });
+function extractSheetId(v) {
+    if (!v) return v;
+    var m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    return m ? m[1] : v;
 }
 
-app.get('/api/groups', async function (req, res) {
-    if (clientStatus !== 'connected') return res.status(503).json({ error: 'WhatsApp non connecte' });
-    try {
-        console.log('Chargement des groupes...');
-        var groups;
-        try {
-            groups = await getGroupsFromPage(client.pupPage);
-        } catch (_) {
-            await new Promise(function(r) { setTimeout(r, 1000); });
-            groups = await getGroupsFromPage(client.pupPage);
-        }
-        console.log('Groupes trouves:', groups.length);
-        if (groups.length > 0) {
-            console.log('--- LISTE DES GROUPES ---');
-            groups.forEach(function(g) { console.log('Nom: ' + g.name + ' | ID: ' + g.id); });
-        }
-        res.json(groups);
-    } catch (err) {
-        console.error('Erreur chargement groupes:', err.message);
-        res.status(500).json({ error: err.message });
-    }
-});
-
 app.post('/api/config', function (req, res) {
-    var data = req.body;
-    if (data.groupId) config.groupId = data.groupId;
-    if (data.publicUrl) config.publicUrl = data.publicUrl;
-    if (data.groupId || data.publicUrl) saveConfig(config);
+    var d = req.body;
+    if (d.groupId !== undefined) config.groupId = d.groupId;
+    if (d.sheetId !== undefined) config.sheetId = extractSheetId(d.sheetId);
+    if (d.publicUrl !== undefined) config.publicUrl = d.publicUrl;
+    if (d.groupId !== undefined || d.sheetId !== undefined || d.publicUrl !== undefined) saveConfig(config);
+    if (d.sheetId !== undefined) startPolling();
     res.json({ success: true });
 });
 
@@ -348,131 +343,106 @@ app.get('/api/config', function (req, res) {
     res.json(config);
 });
 
+app.get('/api/groups', async function (req, res) {
+    if (clientStatus !== 'connected') return res.status(503).json({ error: 'WhatsApp non connecte' });
+    try {
+        var groups = await client.pupPage.evaluate(function() {
+            var chats = window.require('WAWebCollections').Chat.getModelsArray();
+            return chats.filter(function(c) { return c.groupMetadata; }).map(function(c) {
+                return { id: c.id._serialized, name: c.formattedTitle || c.name || c.id._serialized };
+            });
+        });
+        res.json(groups);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/pairing', async function (req, res) {
     var phone = req.body.phone;
     if (!phone) return res.status(400).json({ error: 'Numero requis' });
     if (clientStatus === 'connected') return res.status(400).json({ error: 'Deja connecte' });
-    try {
-        console.log('Demande de code de couplage pour:', phone);
-        await client.destroy();
-    } catch (_) { }
-    qrCodeData = null;
-    pairingCodeData = null;
-    clientStatus = 'initializing';
+    try { await client.destroy(); } catch (_) {}
+    qrCodeData = null; pairingCodeData = null; clientStatus = 'initializing';
     client = new Client({
         authStrategy: new LocalAuth(),
-        puppeteer: {
-            headless: true,
-            protocolTimeout: 120000,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process']
-        },
+        puppeteer: { headless: true, protocolTimeout: 120000, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process'] },
         pairWithPhoneNumber: { phoneNumber: phone }
     });
     attachClientEvents();
     client.initialize();
-    res.json({ success: true, message: 'Code de couplage envoye a WhatsApp', code: 'En attente...' });
+    res.json({ success: true, message: 'Code de couplage envoye' });
 });
 
 app.get('/qr-image', function (req, res) {
     if (!qrCodeData) return res.status(404).send('Aucun QR');
     QRCode.toDataURL(qrCodeData, function (err, url) {
         if (err) return res.status(500).send('Erreur');
-        var base64 = url.replace(/^data:image\/png;base64,/, '');
-        var img = Buffer.from(base64, 'base64');
+        var b = url.replace(/^data:image\/png;base64,/, '');
         res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
-        res.end(img);
+        res.end(Buffer.from(b, 'base64'));
     });
 });
 
+app.get('/debug', function (req, res) {
+    res.json({ clientStatus, hasQr: !!qrCodeData, qrLen: qrCodeData ? qrCodeData.length : 0, hasPairing: !!pairingCodeData, sheetConfigured: !!config.sheetId, config });
+});
+
 app.get('/status', function (req, res) {
-    res.json({ status: clientStatus, hasQr: !!qrCodeData, hasPairing: !!pairingCodeData });
+    res.json({ status: clientStatus, hasQr: !!qrCodeData, hasPairing: !!pairingCodeData, sheetConfigured: !!config.sheetId });
 });
 
 var PORT = process.env.PORT || 3000;
 
 function attachClientEvents() {
     client.on('qr', function (qr) {
-        qrCodeData = qr;
-        pairingCodeData = null;
-        clientStatus = 'awaiting_scan';
+        qrCodeData = qr; pairingCodeData = null; clientStatus = 'awaiting_scan';
         console.log('--- SCANNEZ LE QR CODE CI-DESSOUS AVEC WHATSAPP ---');
         qrcode.generate(qr, { small: true });
         console.log('Ou ouvrez http://localhost:' + PORT + ' pour le voir sur une page web');
     });
-
+        client.on('authenticated', function() { console.log('Auth OK'); });
+    client.on('auth_failure', function(m) { console.log('Auth FAIL:', m); });
     client.on('code', function (code) {
-        pairingCodeData = code;
-        qrCodeData = null;
-        clientStatus = 'awaiting_scan';
+        pairingCodeData = code; qrCodeData = null; clientStatus = 'awaiting_scan';
         console.log('--- CODE DE COUPLAGE ---');
         console.log('Code:', code);
         console.log('Saisis ce code dans WhatsApp > Appareils connectes');
     });
-
     client.on('ready', async function () {
-        qrCodeData = null;
-        pairingCodeData = null;
-        clientStatus = 'connected';
+        qrCodeData = null; pairingCodeData = null; clientStatus = 'connected';
         console.log('WhatsApp connecte !');
         try {
-            var groups;
-            try { groups = await getGroupsFromPage(client.pupPage); }
-            catch (_) {
-                await new Promise(function(r) { setTimeout(r, 1000); });
-                groups = await getGroupsFromPage(client.pupPage);
-            }
+            var groups = await client.pupPage.evaluate(function() {
+                var chats = window.require('WAWebCollections').Chat.getModelsArray();
+                return chats.filter(function(c) { return c.groupMetadata; }).map(function(c) {
+                    return { id: c.id._serialized, name: c.formattedTitle || c.name || c.id._serialized };
+                });
+            });
             if (groups.length > 0) {
                 console.log('--- LISTE DES GROUPES ---');
                 groups.forEach(function(g) { console.log('Nom: ' + g.name + ' | ID: ' + g.id); });
             }
-        } catch (e) { console.log('Impossible de lister les groupes:', e.message); }
+        } catch (_) {}
+        startPolling();
     });
-
     client.on('disconnected', function (reason) {
         clientStatus = 'disconnected';
         console.log('WhatsApp deconnecte:', reason);
+        stopPolling();
     });
 }
 
 var client = new Client({
     authStrategy: new LocalAuth(),
-    puppeteer: {
-        headless: true,
-        protocolTimeout: 120000,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--single-process'
-        ]
-    }
+    puppeteer: { headless: true, protocolTimeout: 120000, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process'] }
 });
 
 attachClientEvents();
-
-app.post('/webhook', async function (req, res) {
-    var message = req.body.message;
-    var groupId = config.groupId;
-    if (!groupId) return res.status(400).json({ error: 'Groupe non configure' });
-    if (clientStatus !== 'connected') return res.status(503).json({ error: 'WhatsApp non connecte' });
-    try {
-        await client.sendMessage(groupId, message);
-        console.log('Message envoye au groupe');
-        return res.json({ success: true });
-    } catch (err) {
-        console.error('Erreur envoi:', err);
-        return res.status(500).json({ error: 'Echec de l envoi' });
-    }
-});
+client.initialize();
 
 app.listen(PORT, function () {
     console.log('SheetPulse demarre sur http://localhost:' + PORT);
-    console.log('Lancement de WhatsApp...');
-    client.initialize();
 });
 
 process.on('uncaughtException', function (err) {
