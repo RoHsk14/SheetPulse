@@ -362,12 +362,7 @@ app.get('/api/config', function (req, res) {
 app.get('/api/groups', async function (req, res) {
     if (clientStatus !== 'connected') return res.status(503).json({ error: 'WhatsApp non connecte' });
     try {
-        var groups = await client.pupPage.evaluate(function() {
-            var chats = window.require('WAWebCollections').Chat.getModelsArray();
-            return chats.filter(function(c) { return c.groupMetadata; }).map(function(c) {
-                return { id: c.id._serialized, name: c.formattedTitle || c.name || c.id._serialized };
-            });
-        });
+        var groups = await getGroups();
         res.json(groups);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -411,6 +406,25 @@ app.get('/status', function (req, res) {
 
 var PORT = process.env.PORT || 3000;
 
+async function getGroups() {
+    var maxRetries = 3;
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            var chats = await client.getChats();
+            return chats.filter(function(c) { return c.isGroup; }).map(function(g) {
+                return { id: g.id._serialized, name: g.name || g.id._serialized };
+            });
+        } catch (err) {
+            if (attempt < maxRetries - 1) {
+                console.log('Tentative ' + (attempt + 1) + ' echouee, nouvelle tentative...');
+                await new Promise(function(r) { setTimeout(r, 1000); });
+            } else {
+                throw err;
+            }
+        }
+    }
+}
+
 function attachClientEvents() {
     client.on('qr', function (qr) {
         qrCodeData = qr; pairingCodeData = null; clientStatus = 'awaiting_scan';
@@ -430,17 +444,14 @@ function attachClientEvents() {
         qrCodeData = null; pairingCodeData = null; clientStatus = 'connected';
         console.log('WhatsApp connecte !');
         try {
-            var groups = await client.pupPage.evaluate(function() {
-                var chats = window.require('WAWebCollections').Chat.getModelsArray();
-                return chats.filter(function(c) { return c.groupMetadata; }).map(function(c) {
-                    return { id: c.id._serialized, name: c.formattedTitle || c.name || c.id._serialized };
-                });
-            });
+            var groups = await getGroups();
             if (groups.length > 0) {
                 console.log('--- LISTE DES GROUPES ---');
                 groups.forEach(function(g) { console.log('Nom: ' + g.name + ' | ID: ' + g.id); });
             }
-        } catch (_) {}
+        } catch (err) {
+            console.error('Erreur chargement groupes:', err.message);
+        }
         startPolling();
     });
     client.on('disconnected', function (reason) {
@@ -456,7 +467,9 @@ var client = new Client({
 });
 
 attachClientEvents();
-client.initialize();
+client.initialize().catch(function (err) {
+    console.error('Erreur initialisation WhatsApp:', err.message);
+});
 
 app.listen(PORT, function () {
     console.log('SheetPulse demarre sur http://localhost:' + PORT);
@@ -464,4 +477,7 @@ app.listen(PORT, function () {
 
 process.on('uncaughtException', function (err) {
     console.error('Erreur:', err.message);
+});
+process.on('unhandledRejection', function (reason) {
+    console.error('Rejection non geree:', reason);
 });
