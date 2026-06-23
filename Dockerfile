@@ -53,5 +53,5 @@ COPY . .
 # Expose default port (Render will set $PORT)
 EXPOSE 3000
 
-# Launch the bot
-CMD ["node", "server.js"]
+# Launch the bot (temporarily replaced to test)
+CMD ["node", "--version"]
