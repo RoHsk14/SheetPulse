@@ -394,6 +394,7 @@ app.get('/debug', function (req, res) {
 });
 
 app.get('/status', function (req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
     res.json({ status: clientStatus, hasQr: !!qrCodeData, hasPairing: !!pairingCodeData, sheetConfigured: !!config.sheetId });
 });
 
