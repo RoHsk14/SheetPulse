@@ -1,4 +1,20 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+console.log('STARTUP: beginning');
+
+process.on('uncaughtException', function (err) {
+    console.error('UNCAUGHT EXCEPTION:', err.message, err.stack);
+});
+process.on('unhandledRejection', function (reason) {
+    console.error('UNHANDLED REJECTION:', reason);
+});
+
+var whatsappWeb;
+try {
+    whatsappWeb = require('whatsapp-web.js');
+} catch (e) {
+    console.error('FAILED to require whatsapp-web.js:', e.message, e.stack);
+    process.exit(1);
+}
+const { Client, LocalAuth } = whatsappWeb;
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const express = require('express');
@@ -484,13 +500,8 @@ client.initialize().catch(function (err) {
     console.error('Erreur initialisation WhatsApp:', err.message);
 });
 
-app.listen(PORT, function () {
-    console.log('SheetPulse demarre sur http://localhost:' + PORT);
+app.listen(PORT, '0.0.0.0', function () {
+    console.log('STARTUP: server listening on http://0.0.0.0:' + PORT);
 });
 
-process.on('uncaughtException', function (err) {
-    console.error('Erreur:', err.message);
-});
-process.on('unhandledRejection', function (reason) {
-    console.error('Rejection non geree:', reason);
-});
+
