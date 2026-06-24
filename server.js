@@ -47,7 +47,7 @@ if (process.env.GROUP_ID) config.groupId = process.env.GROUP_ID;
 if (process.env.SHEET_ID) config.sheetId = process.env.SHEET_ID;
 if (process.env.PUBLIC_URL) config.publicUrl = process.env.PUBLIC_URL;
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey, { realtime: { transport: WebSocket } }) : null;
 const groupId = process.env.GROUP_ID || null;
 
@@ -148,11 +148,17 @@ function getSaEmail() {
 
 function startPolling() {
     stopPolling();
-    sheetsService = initSheets();
-    if (sheetsService && config.sheetId) {
-        console.log('Surveillance du sheet demarree (toutes les 30s)');
-        checkSheet();
-        pollTimer = setInterval(checkSheet, POLL_INTERVAL);
+    if (!supabase) {
+        sheetsService = initSheets();
+        if (sheetsService && config.sheetId) {
+            console.log('Surveillance du sheet local demarree (toutes les 30s)');
+            checkSheet();
+            pollTimer = setInterval(checkSheet, POLL_INTERVAL);
+        }
+    } else {
+        console.log('Surveillance multi-boutiques via Supabase demarree (toutes les 30s)');
+        checkAllSheets();
+        pollTimer = setInterval(checkAllSheets, POLL_INTERVAL);
     }
 }
 
@@ -203,7 +209,7 @@ async function checkSheet() {
 
             try {
                 await client.sendMessage(config.groupId, msg);
-                console.log('Commande ' + r.index + ' envoyee au groupe');
+                console.log('Commande ' + r.index + ' envoyee au groupe ' + config.groupId);
             } catch (e) {
                 console.log('Erreur envoi commande ' + r.index + ': ' + e.message);
             }
@@ -223,6 +229,76 @@ async function checkSheet() {
         if (e.code === 404) { console.log('Sheet introuvable, verifie l ID'); }
         else if (e.code === 403) { console.log('Acces refuse. Partage le sheet avec ' + getSaEmail()); }
         else { console.log('Erreur lecture sheet:', e.message); }
+    }
+}
+
+async function checkAllSheets() {
+    if (clientStatus !== 'connected' || !supabase) return;
+    try {
+        var { data: shops, error } = await supabase
+            .from('settings')
+            .select('shop_slug, google_sheet_url, whatsapp_group_id, google_sheet_columns')
+            .not('google_sheet_url', 'is', null)
+            .not('whatsapp_group_id', 'is', null);
+        if (error || !shops || shops.length === 0) return;
+
+        var sheets = initSheets();
+        if (!sheets) return;
+
+        for (var s = 0; s < shops.length; s++) {
+            var shop = shops[s];
+            var sheetId = extractSheetId(shop.google_sheet_url);
+            if (!sheetId) continue;
+            try {
+                var res = await sheets.spreadsheets.values.get({
+                    spreadsheetId: sheetId,
+                    range: 'A:K',
+                    valueRenderOption: 'UNFORMATTED_VALUE'
+                });
+                var rows = res.data.values;
+                if (!rows || rows.length < 2) continue;
+
+                for (var i = 1; i < rows.length; i++) {
+                    var row = rows[i];
+                    if (!row || !row[1]) continue;
+                    var statut = (row[9] || '').toString().trim().toLowerCase();
+                    if (statut === 'envoye' || statut === 'envoyé') continue;
+
+                    var msg = '📦 *NOUVELLE COMMANDE* 📦\n\n'
+                        + '*Client :* ' + (row[1] || '') + '\n'
+                        + '*Tel :* ' + (row[2] || '') + '\n'
+                        + '*Adresse :* ' + (row[3] || '') + ' (' + (row[4] || '') + ')\n'
+                        + '*Produit :* ' + (row[5] || '') + ' x' + (row[6] || '') + '\n'
+                        + '*Total :* ' + (row[7] || '') + ' ' + (row[8] || 'FCFA') + '\n'
+                        + '*Statut :* ' + (row[9] || 'En attente') + '\n\n'
+                        + '⚡ _Commande du ' + (row[0] || '') + '_';
+
+                    try {
+                        await client.sendMessage(shop.whatsapp_group_id, msg);
+                        console.log('[' + shop.shop_slug + '] Commande ligne ' + (i + 1) + ' envoyee');
+                    } catch (e) {
+                        console.log('[' + shop.shop_slug + '] Erreur envoi: ' + e.message);
+                    }
+
+                    try {
+                        await sheets.spreadsheets.values.update({
+                            spreadsheetId: sheetId,
+                            range: 'J' + (i + 1),
+                            valueInputOption: 'RAW',
+                            resource: { values: [['Envoye']] }
+                        });
+                    } catch (_) {}
+                }
+            } catch (e) {
+                if (e.code === 403) {
+                    console.log('[' + shop.shop_slug + '] Acces refuse. Partage le sheet avec ' + getSaEmail());
+                } else {
+                    console.log('[' + shop.shop_slug + '] Erreur: ' + e.message);
+                }
+            }
+        }
+    } catch (e) {
+        console.log('Erreur checkAllSheets:', e.message);
     }
 }
 
@@ -505,27 +581,64 @@ app.post('/api/config', function (req, res) {
 });
 
 app.get('/api/check-now', async function (req, res) {
-    if (!sheetsService) {
-        sheetsService = initSheets();
-    }
-    if (!sheetsService) return res.json({ error: 'Sheets non initialise' });
-    if (!config.sheetId) return res.json({ error: 'Sheet ID non configure' });
-    try {
-        var r = await sheetsService.spreadsheets.values.get({
-            spreadsheetId: config.sheetId,
-            range: 'A:K',
-            valueRenderOption: 'UNFORMATTED_VALUE'
-        });
-        var rows = r.data.values;
-        res.json({
-            rowCount: rows ? rows.length : 0,
-            lastProcessedRow: config.lastProcessedRow,
-            headers: rows && rows[0] ? rows[0] : [],
-            lastRow: rows && rows.length > 1 ? rows[rows.length - 1] : null,
-            sheetsService: !!sheetsService
-        });
-    } catch (e) {
-        res.json({ error: e.message, code: e.code, sheetsService: !!sheetsService });
+    if (supabase) {
+        var sheets = initSheets();
+        if (!sheets) return res.json({ error: 'Sheets non initialise' });
+        try {
+            var { data: shops, error } = await supabase
+                .from('settings')
+                .select('shop_slug, google_sheet_url, whatsapp_group_id')
+                .not('google_sheet_url', 'is', null)
+                .not('whatsapp_group_id', 'is', null);
+            if (error) return res.json({ error: error.message });
+            var results = [];
+            for (var s = 0; s < (shops || []).length; s++) {
+                var shop = shops[s];
+                var sheetId = extractSheetId(shop.google_sheet_url);
+                if (!sheetId) { results.push({ shop: shop.shop_slug, error: 'URL invalide' }); continue; }
+                try {
+                    var r = await sheets.spreadsheets.values.get({
+                        spreadsheetId: sheetId,
+                        range: 'A:K',
+                        valueRenderOption: 'UNFORMATTED_VALUE'
+                    });
+                    var rows = r.data.values;
+                    results.push({
+                        shop: shop.shop_slug,
+                        sheetId: sheetId,
+                        groupId: shop.whatsapp_group_id,
+                        rowCount: rows ? rows.length : 0,
+                        lastRow: rows && rows.length > 1 ? rows[rows.length - 1] : null
+                    });
+                } catch (e) {
+                    results.push({ shop: shop.shop_slug, error: e.message, code: e.code });
+                }
+            }
+            res.json({ mode: 'supabase', shops: results });
+        } catch (e) {
+            res.json({ error: e.message });
+        }
+    } else {
+        if (!sheetsService) sheetsService = initSheets();
+        if (!sheetsService) return res.json({ error: 'Sheets non initialise' });
+        if (!config.sheetId) return res.json({ error: 'Sheet ID non configure' });
+        try {
+            var r = await sheetsService.spreadsheets.values.get({
+                spreadsheetId: config.sheetId,
+                range: 'A:K',
+                valueRenderOption: 'UNFORMATTED_VALUE'
+            });
+            var rows = r.data.values;
+            res.json({
+                mode: 'local',
+                rowCount: rows ? rows.length : 0,
+                lastProcessedRow: config.lastProcessedRow,
+                headers: rows && rows[0] ? rows[0] : [],
+                lastRow: rows && rows.length > 1 ? rows[rows.length - 1] : null
+            });
+        } catch (e) {
+            res.json({ error: e.message, code: e.code });
+        }
     }
 });
 
