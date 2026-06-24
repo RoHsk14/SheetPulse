@@ -497,7 +497,32 @@ app.post('/api/config', function (req, res) {
     if (data.publicUrl !== undefined) config.publicUrl = data.publicUrl;
     if (data.groupId !== undefined || data.sheetId !== undefined || data.publicUrl !== undefined) saveConfig(config);
     if (data.sheetId !== undefined) startPolling();
-    res.json({ success: true });
+    res.json({ success: true, lastProcessedRow: config.lastProcessedRow });
+});
+
+app.get('/api/check-now', async function (req, res) {
+    if (!sheetsService) {
+        sheetsService = initSheets();
+    }
+    if (!sheetsService) return res.json({ error: 'Sheets non initialise' });
+    if (!config.sheetId) return res.json({ error: 'Sheet ID non configure' });
+    try {
+        var r = await sheetsService.spreadsheets.values.get({
+            spreadsheetId: config.sheetId,
+            range: 'A:K',
+            valueRenderOption: 'UNFORMATTED_VALUE'
+        });
+        var rows = r.data.values;
+        res.json({
+            rowCount: rows ? rows.length : 0,
+            lastProcessedRow: config.lastProcessedRow,
+            headers: rows && rows[0] ? rows[0] : [],
+            lastRow: rows && rows.length > 1 ? rows[rows.length - 1] : null,
+            sheetsService: !!sheetsService
+        });
+    } catch (e) {
+        res.json({ error: e.message, code: e.code, sheetsService: !!sheetsService });
+    }
 });
 
 app.get('/api/config', function (req, res) {
