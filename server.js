@@ -5,11 +5,18 @@ process.on('unhandledRejection', function (reason) {
     console.error('UNHANDLED:', reason);
 });
 
+require('dotenv').config();
+
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const express = require('express');
 const fs = require('fs');
+const { google } = require('googleapis');
+const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
+const path = require('path');
+const os = require('os');
 
 const CONFIG_PATH = './config.json';
 
@@ -32,6 +39,12 @@ app.use(function (req, res, next) {
 });
 
 let config = loadConfig();
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+const groupId = process.env.GROUP_ID || null;
+
+let pollTimer = null;
 let qrCodeData = null;
 let pairingCodeData = null;
 let clientStatus = 'initializing';
@@ -79,6 +92,83 @@ function generateAppsScript(baseUrl) {
         '    .create();',
         '}'
     ].join('\n');
+}
+
+function getGoogleAuth() {
+    const keyJson =
+        process.env.GOOGLE_SERVICE_ACCOUNT_KEY &&
+        process.env.GOOGLE_SERVICE_ACCOUNT_KEY.startsWith('{')
+            ? process.env.GOOGLE_SERVICE_ACCOUNT_KEY
+            : fs.readFileSync(
+                  process.env.GOOGLE_SERVICE_ACCOUNT_KEY ||
+                      path.join(os.homedir(), 'service-account-key.json'),
+                  'utf8'
+              );
+    const credentials = JSON.parse(keyJson);
+    return new google.auth.GoogleAuth({
+        credentials,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+    });
+}
+
+function extractSheetId(url) {
+    const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    return m ? m[1] : null;
+}
+
+async function checkSheets(client) {
+    if (!supabase) return;
+    const { data: shops } = await supabase.from('shops').select('*');
+    if (!shops) return;
+    for (const shop of shops) {
+        if (!shop.google_sheet_url || !shop.whatsapp_group_id) continue;
+        if (groupId && shop.whatsapp_group_id !== groupId) continue;
+        try {
+            const sheetId = extractSheetId(shop.google_sheet_url);
+            if (!sheetId) continue;
+            const auth = getGoogleAuth();
+            const sheets = google.sheets({ version: 'v4', auth });
+            const res = await sheets.spreadsheets.values.get({
+                spreadsheetId: sheetId,
+                range: 'Sheet1',
+            });
+            const rows = res.data.values;
+            if (!rows || rows.length < 2) continue;
+            const lastRow = rows[rows.length - 1];
+            if (!lastRow || !lastRow[1]) continue;
+            const [date, clientName, tel, adresse, quartier, produit, qte, total, devise, statut] =
+                lastRow;
+            const msg = [
+                '📦 *NOUVELLE COMMANDE* 📦',
+                '',
+                `*Client :* ${clientName || ''}`,
+                `*Tel :* ${tel || ''}`,
+                `*Adresse :* ${adresse || ''} (${quartier || ''})`,
+                `*Produit :* ${produit || ''} x${qte || ''}`,
+                `*Total :* ${total || ''} ${devise || 'FCFA'}`,
+                `*Statut :* ${statut || 'En attente'}`,
+                '',
+                `⚡ _Commande du ${date || ''}_`,
+            ].join('\n');
+            const chat = await client.getChatById(shop.whatsapp_group_id);
+            await chat.sendMessage(msg);
+        } catch (err) {
+            console.error('Sheet polling error for shop', shop.id, err.message);
+        }
+    }
+}
+
+async function startPolling(waClient) {
+    if (pollTimer) return;
+    console.log('Starting sheet polling (every 30s)...');
+    pollTimer = setInterval(() => checkSheets(waClient), 30000);
+}
+
+function stopPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
 }
 
 function baseHtml(title, content) {
@@ -368,6 +458,7 @@ app.post('/api/pairing', async function (req, res) {
     if (clientStatus === 'connected') return res.status(400).json({ error: 'Deja connecte' });
     try {
         console.log('Demande de code de couplage pour:', phone);
+        stopPolling();
         await client.destroy();
     } catch (_) { }
     qrCodeData = null;
@@ -440,10 +531,12 @@ function attachClientEvents() {
                 groups.forEach(function(g) { console.log('Nom: ' + g.name + ' | ID: ' + g.id); });
             }
         } catch (e) { console.log('Impossible de lister les groupes:', e.message); }
+        startPolling(client);
     });
 
     client.on('disconnected', function (reason) {
         clientStatus = 'disconnected';
+        stopPolling();
         console.log('WhatsApp deconnecte:', reason);
     });
 }
