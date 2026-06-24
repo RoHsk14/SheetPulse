@@ -770,7 +770,39 @@ app.post('/webhook', async function (req, res) {
 
 app.listen(PORT, '0.0.0.0', function () {
     console.log('STARTUP: listening on http://0.0.0.0:' + PORT);
-    client.initialize().catch(function (err) {
-        console.error('Erreur init WhatsApp:', err.message);
-    });
+    (function tryInit(retries) {
+        client.initialize().catch(function (err) {
+            console.error('Erreur init WhatsApp (' + retries + ' retry left):', err.message);
+            if (retries > 0) {
+                setTimeout(function() {
+                    client = new Client({
+                        authStrategy: new LocalAuth({ dataPath: authDataPath }),
+                        webVersionCache: {
+                            type: 'local',
+                            path: path.join(DATA_DIR, '.wwebjs_cache'),
+                        },
+                        puppeteer: {
+                            headless: true,
+                            protocolTimeout: 600000,
+                            executablePath: process.env.CHROME_PATH || undefined,
+                            args: [
+                                '--no-sandbox',
+                                '--disable-setuid-sandbox',
+                                '--disable-dev-shm-usage',
+                                '--disable-accelerated-2d-canvas',
+                                '--no-first-run',
+                                '--no-zygote',
+                                '--disable-gpu',
+                                '--single-process',
+                                '--disable-web-security',
+                                '--disable-features=IsolateOrigins,site-per-process'
+                            ]
+                        }
+                    });
+                    attachClientEvents();
+                    tryInit(retries - 1);
+                }, 30000);
+            }
+        });
+    })(5);
 });
