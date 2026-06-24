@@ -18,6 +18,7 @@ const WebSocket = require('ws');
 const path = require('path');
 const os = require('os');
 
+const authDataPath = path.join(os.homedir(), '.wwebjs_auth');
 const CONFIG_PATH = './config.json';
 const SA_PATH = './service-account.json';
 const POLL_INTERVAL = 30000;
@@ -544,10 +545,16 @@ app.post('/api/pairing', async function (req, res) {
     pairingCodeData = null;
     clientStatus = 'initializing';
     client = new Client({
-        authStrategy: new LocalAuth(),
+        authStrategy: new LocalAuth({ dataPath: authDataPath }),
+        webVersion: '2.2401.1',
+        webVersionCache: {
+            type: 'local',
+            path: path.join(__dirname, '.wwebjs_cache'),
+        },
         puppeteer: {
             headless: true,
             protocolTimeout: 300000,
+            executablePath: process.env.CHROME_PATH || undefined,
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process']
         },
         pairWithPhoneNumber: { phoneNumber: phone }
@@ -625,10 +632,16 @@ function attachClientEvents() {
 }
 
 var client = new Client({
-    authStrategy: new LocalAuth(),
+    authStrategy: new LocalAuth({ dataPath: authDataPath }),
+    webVersion: '2.2401.1',
+    webVersionCache: {
+        type: 'local',
+        path: path.join(__dirname, '.wwebjs_cache'),
+    },
     puppeteer: {
         headless: true,
         protocolTimeout: 300000,
+        executablePath: process.env.CHROME_PATH || undefined,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
