@@ -194,9 +194,8 @@ router.post('/pairing', async function (req, res) {
     authStrategy: new LocalAuth({ dataPath: authDataPath }),
     puppeteer: {
       headless: true,
-      // Utilise le chrome déjà présent sur l’image Render (ou celui que vous indiquez via CHROME_PATH)
       executablePath: process.env.CHROME_PATH || undefined,
-      protocolTimeout: 120000,
+      protocolTimeout: 300000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -205,7 +204,8 @@ router.post('/pairing', async function (req, res) {
         '--no-first-run',
         '--no-zygote',
         '--disable-gpu',
-        '--single-process'
+        '--single-process',
+        '--disable-gl-drawing-for-tests',
       ]
     }, pairWithPhoneNumber: { phoneNumber: phone },
   });
@@ -219,7 +219,21 @@ router.post('/reset', async function (req, res) {
   qrCodeData = null; pairingCodeData = null; clientStatus = 'initializing';
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: authDataPath }),
-    puppeteer: { headless: true, protocolTimeout: 120000, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process'] },
+    puppeteer: {
+      headless: true,
+      protocolTimeout: 300000,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu',
+        '--single-process',
+        '--disable-gl-drawing-for-tests',
+      ],
+    },
   });
   attachClientEvents();
   client.initialize();
@@ -271,7 +285,21 @@ function attachClientEvents() {
 
 client = new Client({
   authStrategy: new LocalAuth({ dataPath: authDataPath }),
-  puppeteer: { headless: true, protocolTimeout: 120000, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process'] },
+  puppeteer: {
+    headless: true,
+    protocolTimeout: 300000,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu',
+      '--single-process',
+      '--disable-gl-drawing-for-tests',
+    ],
+  },
 });
 attachClientEvents();
 client.initialize();
