@@ -646,12 +646,19 @@ app.get('/api/debug-auth', async function (req, res) {
         var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
         if (!envKey) return res.json({ error: 'GOOGLE_SERVICE_ACCOUNT_KEY not set' });
         var creds = JSON.parse(envKey);
+        var fields = Object.keys(creds);
+        var hasPrivateKey = 'private_key' in creds;
+        var pkType = typeof creds.private_key;
+        var pkLen = creds.private_key ? creds.private_key.length : 0;
+        if (!hasPrivateKey || !creds.private_key) {
+            return res.json({ error: 'private_key missing in JSON', fields, hasPrivateKey, pkType, client_email: creds.client_email });
+        }
         var auth = new google.auth.JWT(
             creds.client_email, null, creds.private_key,
             ['https://www.googleapis.com/auth/spreadsheets']
         );
         var token = await auth.getAccessToken();
-        res.json({ email: creds.client_email, token_received: !!token, project_id: creds.project_id });
+        res.json({ email: creds.client_email, token_received: !!token, project_id: creds.project_id, fields, pkLen });
     } catch (e) {
         res.json({ error: e.message, stack: e.stack ? e.stack.split('\n')[0] : null });
     }
