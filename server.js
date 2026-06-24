@@ -240,7 +240,10 @@ async function checkAllSheets() {
             .select('shop_slug, google_sheet_url, whatsapp_group_id, google_sheet_columns')
             .not('google_sheet_url', 'is', null)
             .not('whatsapp_group_id', 'is', null);
-        if (error || !shops || shops.length === 0) return;
+        if (error || !shops || shops.length === 0) {
+            if (error) console.log('Erreur Supabase checkAllSheets:', error.message);
+            return;
+        }
 
         var sheets = initSheets();
         if (!sheets) return;
