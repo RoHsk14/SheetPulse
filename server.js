@@ -50,7 +50,6 @@ let pollTimer = null;
 let qrCodeData = null;
 let pairingCodeData = null;
 let clientStatus = 'initializing';
-let pollTimer = null;
 let sheetsService = null;
 
 function generateAppsScript(baseUrl) {
