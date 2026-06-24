@@ -291,9 +291,9 @@ async function checkAllSheets() {
                 }
             } catch (e) {
                 if (e.code === 403) {
-                    console.log('[' + shop.shop_slug + '] Acces refuse. Partage le sheet avec ' + getSaEmail());
+                    console.log('[' + shop.shop_slug + '] Acces refuse au sheet ' + sheetId + '. Partage le sheet avec ' + getSaEmail());
                 } else {
-                    console.log('[' + shop.shop_slug + '] Erreur: ' + e.message);
+                    console.log('[' + shop.shop_slug + '] Erreur sheet ' + sheetId + ': ' + e.message);
                 }
             }
         }
@@ -539,10 +539,16 @@ app.get('/integration', function (req, res) {
 });
 
 async function getGroups() {
-    var chats = await client.getChats();
-    return chats.filter(function(c) { return c.isGroup; }).map(function(c) {
-        return { id: c.id._serialized, name: c.name || c.id._serialized };
-    });
+    if (!client || !client.getChats) return [];
+    try {
+        var chats = await client.getChats();
+        return chats.filter(function(c) { return c.isGroup; }).map(function(c) {
+            return { id: c.id._serialized, name: c.name || c.id._serialized };
+        });
+    } catch (e) {
+        console.log('Erreur getGroups:', e.message);
+        return [];
+    }
 }
 
 app.get('/api/groups', async function (req, res) {
