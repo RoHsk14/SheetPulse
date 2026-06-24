@@ -8,6 +8,7 @@ const QRCode = require('qrcode');
 const express = require('express');
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 3001;
 const POLL_INTERVAL = 30000;
@@ -15,7 +16,7 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SA_KEY_PATH = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || './service-account-key.json';
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { realtime: { enabled: false } });
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { realtime: { transport: WebSocket } });
 
 let qrCodeData = null;
 let pairingCodeData = null;
