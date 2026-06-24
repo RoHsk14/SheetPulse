@@ -2,3 +2,7 @@ node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
 .env
+*.log
+qr.png
+config.json
+service-account.json

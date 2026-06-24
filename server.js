@@ -19,10 +19,12 @@ const path = require('path');
 const os = require('os');
 
 const CONFIG_PATH = './config.json';
+const SA_PATH = './service-account.json';
+const POLL_INTERVAL = 30000;
 
 function loadConfig() {
     try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); }
-    catch { return { groupId: '' }; }
+    catch { return { groupId: '', sheetId: '', publicUrl: '', lastProcessedRow: 0 }; }
 }
 function saveConfig(config) {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
@@ -48,6 +50,8 @@ let pollTimer = null;
 let qrCodeData = null;
 let pairingCodeData = null;
 let clientStatus = 'initializing';
+let pollTimer = null;
+let sheetsService = null;
 
 function generateAppsScript(baseUrl) {
     return [
@@ -94,80 +98,129 @@ function generateAppsScript(baseUrl) {
     ].join('\n');
 }
 
-function getGoogleAuth() {
-    const keyJson =
-        process.env.GOOGLE_SERVICE_ACCOUNT_KEY &&
-        process.env.GOOGLE_SERVICE_ACCOUNT_KEY.startsWith('{')
-            ? process.env.GOOGLE_SERVICE_ACCOUNT_KEY
-            : fs.readFileSync(
-                  process.env.GOOGLE_SERVICE_ACCOUNT_KEY ||
-                      path.join(os.homedir(), 'service-account-key.json'),
-                  'utf8'
-              );
-    const credentials = JSON.parse(keyJson);
-    return new google.auth.GoogleAuth({
-        credentials,
-        scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-    });
+function extractSheetId(v) {
+    if (!v) return v;
+    var m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    return m ? m[1] : v;
 }
 
-function extractSheetId(url) {
-    const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-    return m ? m[1] : null;
-}
-
-async function checkSheets(client) {
-    if (!supabase) return;
-    const { data: shops } = await supabase.from('shops').select('*');
-    if (!shops) return;
-    for (const shop of shops) {
-        if (!shop.google_sheet_url || !shop.whatsapp_group_id) continue;
-        if (groupId && shop.whatsapp_group_id !== groupId) continue;
-        try {
-            const sheetId = extractSheetId(shop.google_sheet_url);
-            if (!sheetId) continue;
-            const auth = getGoogleAuth();
-            const sheets = google.sheets({ version: 'v4', auth });
-            const res = await sheets.spreadsheets.values.get({
-                spreadsheetId: sheetId,
-                range: 'Sheet1',
+function initSheets() {
+    try {
+        const { google } = require('googleapis');
+        var auth;
+        var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+        if (envKey) {
+            var creds = JSON.parse(envKey);
+            auth = new google.auth.JWT(
+                creds.client_email,
+                null,
+                creds.private_key,
+                ['https://www.googleapis.com/auth/spreadsheets']
+            );
+        } else {
+            if (!fs.existsSync(SA_PATH)) {
+                console.log('service-account.json manquant');
+                return null;
+            }
+            auth = new google.auth.GoogleAuth({
+                keyFile: SA_PATH,
+                scopes: ['https://www.googleapis.com/auth/spreadsheets']
             });
-            const rows = res.data.values;
-            if (!rows || rows.length < 2) continue;
-            const lastRow = rows[rows.length - 1];
-            if (!lastRow || !lastRow[1]) continue;
-            const [date, clientName, tel, adresse, quartier, produit, qte, total, devise, statut] =
-                lastRow;
-            const msg = [
-                '📦 *NOUVELLE COMMANDE* 📦',
-                '',
-                `*Client :* ${clientName || ''}`,
-                `*Tel :* ${tel || ''}`,
-                `*Adresse :* ${adresse || ''} (${quartier || ''})`,
-                `*Produit :* ${produit || ''} x${qte || ''}`,
-                `*Total :* ${total || ''} ${devise || 'FCFA'}`,
-                `*Statut :* ${statut || 'En attente'}`,
-                '',
-                `⚡ _Commande du ${date || ''}_`,
-            ].join('\n');
-            const chat = await client.getChatById(shop.whatsapp_group_id);
-            await chat.sendMessage(msg);
-        } catch (err) {
-            console.error('Sheet polling error for shop', shop.id, err.message);
         }
+        return google.sheets({ version: 'v4', auth: auth });
+    } catch (e) {
+        console.log('Erreur init Sheets:', e.message);
+        return null;
     }
 }
 
-async function startPolling(waClient) {
-    if (pollTimer) return;
-    console.log('Starting sheet polling (every 30s)...');
-    pollTimer = setInterval(() => checkSheets(waClient), 30000);
+function getSaEmail() {
+    try {
+        var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+        if (envKey) return JSON.parse(envKey).client_email;
+        return JSON.parse(fs.readFileSync(SA_PATH, 'utf8')).client_email;
+    } catch { return 'service account'; }
+}
+
+function startPolling() {
+    stopPolling();
+    sheetsService = initSheets();
+    if (sheetsService && config.sheetId) {
+        console.log('Surveillance du sheet demarree (toutes les 30s)');
+        checkSheet();
+        pollTimer = setInterval(checkSheet, POLL_INTERVAL);
+    }
 }
 
 function stopPolling() {
-    if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+async function checkSheet() {
+    if (clientStatus !== 'connected' || !config.sheetId || !sheetsService) return;
+    try {
+        var res = await sheetsService.spreadsheets.values.get({
+            spreadsheetId: config.sheetId,
+            range: 'A:K',
+            valueRenderOption: 'UNFORMATTED_VALUE'
+        });
+        var rows = res.data.values;
+        if (!rows || rows.length < 2) return;
+
+        var lastRow = config.lastProcessedRow || 1;
+        var newRows = [];
+        for (var i = lastRow; i < rows.length; i++) {
+            if (rows[i] && rows[i][1]) newRows.push({ index: i + 1, data: rows[i] });
+        }
+        if (newRows.length === 0) return;
+
+        for (var n = 0; n < newRows.length; n++) {
+            var r = newRows[n];
+            var row = r.data;
+            var date = row[0] || '';
+            var clientName = row[1] || '';
+            var tel = row[2] || '';
+            var adresse = row[3] || '';
+            var quartier = row[4] || '';
+            var produit = row[5] || '';
+            var qte = row[6] || '';
+            var total = row[7] || '';
+            var devise = row[8] || 'FCFA';
+            var statut = row[9] || 'En attente';
+
+            var msg = '📦 *NOUVELLE COMMANDE* 📦\n\n'
+                + '*Client :* ' + clientName + '\n'
+                + '*Tel :* ' + tel + '\n'
+                + '*Adresse :* ' + adresse + ' (' + quartier + ')\n'
+                + '*Produit :* ' + produit + ' x' + qte + '\n'
+                + '*Total :* ' + total + ' ' + devise + '\n'
+                + '*Statut :* ' + statut + '\n\n'
+                + '⚡ _Commande du ' + date + '_';
+
+            try {
+                await client.sendMessage(config.groupId, msg);
+                console.log('Commande ' + r.index + ' envoyee au groupe');
+            } catch (e) {
+                console.log('Erreur envoi commande ' + r.index + ': ' + e.message);
+            }
+
+            try {
+                await sheetsService.spreadsheets.values.update({
+                    spreadsheetId: config.sheetId,
+                    range: 'J' + r.index,
+                    valueInputOption: 'RAW',
+                    resource: { values: [['Envoye']] }
+                });
+            } catch (_) {}
+        }
+        config.lastProcessedRow = rows.length;
+        saveConfig(config);
+    } catch (e) {
+        if (e.code === 404) { console.log('Sheet introuvable, verifie l ID'); }
+        else if (e.code === 403) { console.log('Acces refuse. Partage le sheet avec ' + getSaEmail()); }
+        else { console.log('Erreur lecture sheet:', e.message); }
+    }
+}
     }
 }
 
@@ -263,62 +316,89 @@ app.get('/', function (req, res) {
 
 app.get('/config', function (req, res) {
     var selected = config.groupId || '';
+    var saEmail = getSaEmail();
     res.send(baseHtml('Configuration',
         '<h1 class="text-2xl font-bold text-gray-800 mb-6">Configuration</h1>'
         + '<form id="configForm" class="space-y-6">'
+
         + '<div class="bg-white rounded-xl shadow-sm border p-6">'
-        + '<h2 class="text-lg font-semibold text-gray-800 mb-4">Groupe WhatsApp</h2>'
-        + '<label class="block text-sm font-medium text-gray-700 mb-1">Choix du groupe</label>'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Groupe WhatsApp</h2>'
         + '<input type="text" id="groupSearch" placeholder="Rechercher un groupe..."'
         + ' class="w-full px-4 py-2 border rounded-lg mb-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"'
         + (clientStatus !== 'connected' ? ' disabled' : '') + '>'
-        + '<select name="groupId" id="groupSelect" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white" size="8"'
+        + '<select name="groupId" id="groupSelect" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white" size="6"'
         + (clientStatus !== 'connected' ? ' disabled' : '') + '>'
         + (clientStatus === 'connected'
             ? '<option value="">Chargement des groupes...</option>'
-            : '<option value="">Connecte d abord WhatsApp pour voir tes groupes</option>')
+            : '<option value="">Connecte WhatsApp d abord</option>')
         + '</select>'
-        + '<input type="hidden" id="selectedGroup" value="' + selected.replace(/"/g, '&quot;') + '">'
         + '<p id="groupStatus" class="mt-1 text-sm text-gray-400">'
-        + (clientStatus === 'connected' ? 'Chargement en cours...' : 'WhatsApp non connecte')
+        + (clientStatus === 'connected' ? 'Chargement...' : 'WhatsApp non connecte')
         + '</p></div>'
+
+        + '<div class="bg-white rounded-xl shadow-sm border p-6">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Google Sheet</h2>'
+        + '<label class="block text-sm font-medium text-gray-700 mb-1">ID du Google Sheet</label>'
+        + '<input type="text" name="sheetId" id="sheetIdInput" value="' + (config.sheetId || '').replace(/"/g, '&quot;') + '"'
+        + ' placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"'
+        + ' class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm">'
+        + '<p class="mt-1 text-sm text-gray-400">Colle le lien complet ou seulement l ID</p>'
+        + '</div>'
+
+        + '<div class="bg-white rounded-xl shadow-sm border p-6 bg-blue-50 border-blue-200">'
+        + '<h2 class="text-lg font-semibold text-gray-800 mb-2">Partager l acces</h2>'
+        + '<p class="text-sm text-gray-600 mb-3">Ajoute cet email comme <strong>editeur</strong> dans ton Google Sheet :</p>'
+        + '<div class="flex gap-2">'
+        + '<input type="text" id="saEmail" value="' + saEmail + '" readonly class="flex-1 px-4 py-2 bg-white border rounded-lg font-mono text-sm">'
+        + '<button onclick="navigator.clipboard.writeText(document.getElementById(\'saEmail\').value)" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm whitespace-nowrap">Copier</button></div>'
+        + '<p class="mt-2 text-sm text-gray-500">Va dans ton Sheet > Partager > ajoute cet email en editeur.</p>'
+        + '</div>'
+
         + '<button type="submit" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Enregistrer</button></form>'
-        + '<div id="toast" class="hidden fixed bottom-4 right-4 px-6 py-3 bg-green-600 text-white rounded-lg shadow-lg"></div>'
+        + '<div id="toast" class="hidden fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50"></div>'
+
         + '<script>'
         + (clientStatus === 'connected' ? (
             'fetch("/api/groups").then(function(r){'
             + '  if (!r.ok) return r.json().then(function(e){ throw new Error(e.error); });'
             + '  return r.json();'
             + '}).then(function(groups){'
-            + '  var sel = document.getElementById("groupSelect"), search = document.getElementById("groupSearch"), selected = document.getElementById("selectedGroup").value;'
-            + '  function renderGroups(filter) {'
+            + '  var sel = document.getElementById("groupSelect"), search = document.getElementById("groupSearch");'
+            + '  var selected = "' + selected.replace(/"/g, '\\"') + '";'
+            + '  function render(f){'
             + '    sel.options.length = 0;'
-            + '    var f = filter ? filter.toLowerCase() : "";'
-            + '    var count = 0;'
+            + '    var q = f ? f.toLowerCase() : "", c = 0;'
             + '    groups.forEach(function(g){'
-            + '      if (f && g.name.toLowerCase().indexOf(f) === -1 && g.id.toLowerCase().indexOf(f) === -1) return;'
+            + '      if (q && g.name.toLowerCase().indexOf(q) === -1 && g.id.toLowerCase().indexOf(q) === -1) return;'
             + '      var opt = new Option(g.name + " (" + g.id + ")", g.id);'
             + '      if (g.id === selected) opt.selected = true;'
             + '      sel.options[sel.options.length] = opt;'
-            + '      count++;'
+            + '      c++;'
             + '    });'
-            + '    document.getElementById("groupStatus").textContent = count + " / " + groups.length + " groupe(s)";'
+            + '    document.getElementById("groupStatus").textContent = c + " / " + groups.length + " groupe(s)";'
             + '  }'
-            + '  search.addEventListener("input", function(){ renderGroups(this.value); });'
-            + '  renderGroups("");'
-            + '  sel.disabled = false;'
-            + '  search.disabled = false;'
+            + '  search.addEventListener("input", function(){ render(this.value); });'
+            + '  render("");'
+            + '  sel.disabled = false; search.disabled = false;'
             + '}).catch(function(e){ document.getElementById("groupStatus").textContent = "Erreur: " + e.message; });'
         ) : '')
+        + 'function extractSheetId(v){'
+        + '  var m = v.match(/\\/spreadsheets\\/d\\/([a-zA-Z0-9_-]+)/);'
+        + '  return m ? m[1] : v;'
+        + '}'
+        + 'document.getElementById("sheetIdInput").addEventListener("change", function(){'
+        + '  this.value = extractSheetId(this.value);'
+        + '});'
         + 'document.getElementById("configForm").addEventListener("submit", async function(e){'
         + '  e.preventDefault();'
-        + '  var data = { groupId: document.getElementById("groupSelect").value };'
-        + '  var r = await fetch("/api/config", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(data) });'
+        + '  var sheetVal = extractSheetId(document.getElementById("sheetIdInput").value);'
+        + '  var data = { groupId: document.getElementById("groupSelect").value, sheetId: sheetVal };'
+        + '  var r = await fetch("/api/config", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data) });'
         + '  if (r.ok) {'
         + '    var t = document.getElementById("toast");'
-        + '    t.textContent = "Configuration enregistree ✓";'
-        + '    t.classList.remove("hidden");'
-        + '    setTimeout(function(){ t.classList.add("hidden"); }, 3000);'
+        + '    t.className = "fixed bottom-4 right-4 px-6 py-3 bg-green-600 text-white rounded-lg shadow-lg z-50";'
+        + '    t.innerHTML = "Configuration enregistree ! <a href=\'/\' class=\'underline font-medium\'>Voir le dashboard</a>";'
+        + '    setTimeout(function(){ t.classList.add("hidden"); }, 6000);'
         + '  }'
         + '});'
         + '</script>'
@@ -442,9 +522,11 @@ app.get('/api/groups', async function (req, res) {
 
 app.post('/api/config', function (req, res) {
     var data = req.body;
-    if (data.groupId) config.groupId = data.groupId;
-    if (data.publicUrl) config.publicUrl = data.publicUrl;
-    if (data.groupId || data.publicUrl) saveConfig(config);
+    if (data.groupId !== undefined) config.groupId = data.groupId;
+    if (data.sheetId !== undefined) config.sheetId = extractSheetId(data.sheetId);
+    if (data.publicUrl !== undefined) config.publicUrl = data.publicUrl;
+    if (data.groupId !== undefined || data.sheetId !== undefined || data.publicUrl !== undefined) saveConfig(config);
+    if (data.sheetId !== undefined) startPolling();
     res.json({ success: true });
 });
 
@@ -490,7 +572,11 @@ app.get('/qr-image', function (req, res) {
 });
 
 app.get('/status', function (req, res) {
-    res.json({ status: clientStatus, hasQr: !!qrCodeData, hasPairing: !!pairingCodeData });
+    res.json({ status: clientStatus, hasQr: !!qrCodeData, hasPairing: !!pairingCodeData, sheetConfigured: !!config.sheetId });
+});
+
+app.get('/debug', function (req, res) {
+    res.json({ clientStatus, hasQr: !!qrCodeData, qrLen: qrCodeData ? qrCodeData.length : 0, hasPairing: !!pairingCodeData, sheetConfigured: !!config.sheetId, config, commit: process.env.RENDER_GIT_COMMIT || process.env.HF_SPACE || 'local' });
 });
 
 var PORT = process.env.PORT || 3000;
@@ -531,7 +617,7 @@ function attachClientEvents() {
                 groups.forEach(function(g) { console.log('Nom: ' + g.name + ' | ID: ' + g.id); });
             }
         } catch (e) { console.log('Impossible de lister les groupes:', e.message); }
-        startPolling(client);
+        startPolling();
     });
 
     client.on('disconnected', function (reason) {
@@ -578,5 +664,7 @@ app.post('/webhook', async function (req, res) {
 
 app.listen(PORT, '0.0.0.0', function () {
     console.log('STARTUP: listening on http://0.0.0.0:' + PORT);
-    client.initialize();
+    client.initialize().catch(function (err) {
+        console.error('Erreur init WhatsApp:', err.message);
+    });
 });
