@@ -640,6 +640,23 @@ app.get('/api/check-now', async function (req, res) {
     }
 });
 
+app.get('/api/debug-auth', async function (req, res) {
+    try {
+        const { google } = require('googleapis');
+        var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+        if (!envKey) return res.json({ error: 'GOOGLE_SERVICE_ACCOUNT_KEY not set' });
+        var creds = JSON.parse(envKey);
+        var auth = new google.auth.JWT(
+            creds.client_email, null, creds.private_key,
+            ['https://www.googleapis.com/auth/spreadsheets']
+        );
+        var token = await auth.getAccessToken();
+        res.json({ email: creds.client_email, token_received: !!token, project_id: creds.project_id });
+    } catch (e) {
+        res.json({ error: e.message, stack: e.stack ? e.stack.split('\n')[0] : null });
+    }
+});
+
 app.get('/api/config', function (req, res) {
     res.json(config);
 });
