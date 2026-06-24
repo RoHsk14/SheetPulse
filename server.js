@@ -649,16 +649,15 @@ app.post('/api/pairing', async function (req, res) {
     clientStatus = 'initializing';
     client = new Client({
         authStrategy: new LocalAuth({ dataPath: authDataPath }),
-        webVersion: '2.2401.1',
         webVersionCache: {
             type: 'local',
             path: path.join(DATA_DIR, '.wwebjs_cache')
         },
         puppeteer: {
             headless: true,
-            protocolTimeout: 300000,
+            protocolTimeout: 600000,
             executablePath: process.env.CHROME_PATH || undefined,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process', '--disable-web-security', '--disable-features=IsolateOrigins,site-per-process']
         },
         pairWithPhoneNumber: { phoneNumber: phone }
     });
@@ -729,14 +728,13 @@ function attachClientEvents() {
 
 var client = new Client({
     authStrategy: new LocalAuth({ dataPath: authDataPath }),
-    webVersion: '2.2401.1',
     webVersionCache: {
         type: 'local',
         path: path.join(DATA_DIR, '.wwebjs_cache'),
     },
     puppeteer: {
         headless: true,
-        protocolTimeout: 300000,
+        protocolTimeout: 600000,
         executablePath: process.env.CHROME_PATH || undefined,
         args: [
             '--no-sandbox',
@@ -746,7 +744,9 @@ var client = new Client({
             '--no-first-run',
             '--no-zygote',
             '--disable-gpu',
-            '--single-process'
+            '--single-process',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process'
         ]
     }
 });
