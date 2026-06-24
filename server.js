@@ -220,8 +220,6 @@ async function checkSheet() {
         else { console.log('Erreur lecture sheet:', e.message); }
     }
 }
-    }
-}
 
 function baseHtml(title, content) {
     return '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
