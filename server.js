@@ -657,7 +657,7 @@ app.post('/api/pairing', async function (req, res) {
             headless: true,
             protocolTimeout: 600000,
             executablePath: process.env.CHROME_PATH || undefined,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process', '--disable-web-security', '--disable-features=IsolateOrigins,site-per-process']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu', '--single-process', '--disable-web-security', '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests', '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36']
         },
         pairWithPhoneNumber: { phoneNumber: phone }
     });
@@ -695,6 +695,16 @@ function attachClientEvents() {
         console.log('--- SCANNEZ LE QR CODE CI-DESSOUS AVEC WHATSAPP ---');
         qrcode.generate(qr, { small: true });
         console.log('Ou ouvrez http://localhost:' + PORT + ' pour le voir sur une page web');
+    });
+
+    client.on('authenticated', function () {
+        console.log('WhatsApp authentifie (QR scanne)');
+        clientStatus = 'authenticated';
+    });
+
+    client.on('auth_failure', function (msg) {
+        console.log('Echec authentification WhatsApp:', msg);
+        clientStatus = 'auth_failure';
     });
 
     client.on('code', function (code) {
@@ -736,18 +746,19 @@ var client = new Client({
         headless: true,
         protocolTimeout: 600000,
         executablePath: process.env.CHROME_PATH || undefined,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--single-process',
-            '--disable-web-security',
-            '--disable-features=IsolateOrigins,site-per-process'
-        ]
+                        args: [
+                            '--no-sandbox',
+                            '--disable-setuid-sandbox',
+                            '--disable-dev-shm-usage',
+                            '--disable-accelerated-2d-canvas',
+                            '--no-first-run',
+                            '--no-zygote',
+                            '--disable-gpu',
+                            '--single-process',
+                            '--disable-web-security',
+                            '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
+                            '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        ]
     }
 });
 
@@ -785,18 +796,19 @@ app.listen(PORT, '0.0.0.0', function () {
                             headless: true,
                             protocolTimeout: 600000,
                             executablePath: process.env.CHROME_PATH || undefined,
-                            args: [
-                                '--no-sandbox',
-                                '--disable-setuid-sandbox',
-                                '--disable-dev-shm-usage',
-                                '--disable-accelerated-2d-canvas',
-                                '--no-first-run',
-                                '--no-zygote',
-                                '--disable-gpu',
-                                '--single-process',
-                                '--disable-web-security',
-                                '--disable-features=IsolateOrigins,site-per-process'
-                            ]
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu',
+            '--single-process',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
+            '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
                         }
                     });
                     attachClientEvents();
