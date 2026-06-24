@@ -192,6 +192,11 @@ router.post('/pairing', async function (req, res) {
   qrCodeData = null; pairingCodeData = null; clientStatus = 'initializing';
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: authDataPath }),
+    webVersion: '2.2401.1',
+    webVersionCache: {
+      type: 'local',
+      path: path.join(__dirname, '.wwebjs_cache'),
+    },
     puppeteer: {
       headless: true,
       executablePath: process.env.CHROME_PATH || undefined,
@@ -219,6 +224,11 @@ router.post('/reset', async function (req, res) {
   qrCodeData = null; pairingCodeData = null; clientStatus = 'initializing';
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: authDataPath }),
+    webVersion: '2.2401.1',
+    webVersionCache: {
+      type: 'local',
+      path: path.join(__dirname, '.wwebjs_cache'),
+    },
     puppeteer: {
       headless: true,
       protocolTimeout: 300000,
@@ -285,6 +295,11 @@ function attachClientEvents() {
 
 client = new Client({
   authStrategy: new LocalAuth({ dataPath: authDataPath }),
+  webVersion: '2.2401.1',
+  webVersionCache: {
+    type: 'local',
+    path: path.join(__dirname, '.wwebjs_cache'),
+  },
   puppeteer: {
     headless: true,
     protocolTimeout: 300000,
