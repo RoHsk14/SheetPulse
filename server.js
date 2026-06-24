@@ -41,7 +41,7 @@ app.use(function (req, res, next) {
 let config = loadConfig();
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey, { realtime: { transport: WebSocket } }) : null;
 const groupId = process.env.GROUP_ID || null;
 
 let pollTimer = null;
