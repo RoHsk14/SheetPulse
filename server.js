@@ -18,9 +18,10 @@ const WebSocket = require('ws');
 const path = require('path');
 const os = require('os');
 
-const authDataPath = path.join(os.homedir(), '.wwebjs_auth');
-const CONFIG_PATH = './config.json';
-const SA_PATH = './service-account.json';
+var DATA_DIR = process.env.HF_SPACE ? '/data' : '.';
+var authDataPath = path.join(DATA_DIR, '.wwebjs_auth');
+var CONFIG_PATH = path.join(DATA_DIR, 'config.json');
+var SA_PATH = path.join(DATA_DIR, 'service-account.json');
 const POLL_INTERVAL = 30000;
 
 function loadConfig() {
@@ -42,6 +43,9 @@ app.use(function (req, res, next) {
 });
 
 let config = loadConfig();
+if (process.env.GROUP_ID) config.groupId = process.env.GROUP_ID;
+if (process.env.SHEET_ID) config.sheetId = process.env.SHEET_ID;
+if (process.env.PUBLIC_URL) config.publicUrl = process.env.PUBLIC_URL;
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey, { realtime: { transport: WebSocket } }) : null;
@@ -546,7 +550,7 @@ app.post('/api/pairing', async function (req, res) {
         webVersion: '2.2401.1',
         webVersionCache: {
             type: 'local',
-            path: path.join(__dirname, '.wwebjs_cache'),
+            path: path.join(DATA_DIR, '.wwebjs_cache')
         },
         puppeteer: {
             headless: true,
@@ -633,7 +637,7 @@ var client = new Client({
     webVersion: '2.2401.1',
     webVersionCache: {
         type: 'local',
-        path: path.join(__dirname, '.wwebjs_cache'),
+        path: path.join(DATA_DIR, '.wwebjs_cache'),
     },
     puppeteer: {
         headless: true,
