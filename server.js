@@ -115,6 +115,17 @@ function extractSheetId(v) {
     return m ? m[1] : v;
 }
 
+function sendMsg(groupId, text) {
+    return client.sendMessage(groupId, text).catch(function (err) {
+        console.log('Erreur envoi (retry dans 10s):', err.message);
+        return new Promise(function (resolve, reject) {
+            setTimeout(function () {
+                client.sendMessage(groupId, text).then(resolve).catch(reject);
+            }, 10000);
+        });
+    });
+}
+
 function parseServiceAccountKey(raw) {
     if (!raw) return null;
     try {
@@ -305,7 +316,7 @@ async function checkAllSheets() {
                         + '⚡ _Commande du ' + (row[0] || '') + '_';
 
                     try {
-                        await client.sendMessage(shop.whatsapp_group_id, msg);
+                        await sendMsg(shop.whatsapp_group_id, msg);
                         console.log('[' + shop.shop_slug + '] Commande ligne ' + (i + 1) + ' envoyee');
                     } catch (e) {
                         console.log('[' + shop.shop_slug + '] Erreur envoi: ' + e.message);
@@ -840,31 +851,25 @@ function attachClientEvents() {
     });
 }
 
-var client = new Client({
+var clientOptions = {
     authStrategy: new LocalAuth({ dataPath: authDataPath }),
-    webVersionCache: {
-        type: 'local',
-        path: path.join(DATA_DIR, '.wwebjs_cache'),
-    },
+    webVersionCache: { type: 'local', path: path.join(DATA_DIR, '.wwebjs_cache') },
     puppeteer: {
         headless: true,
         protocolTimeout: 600000,
+        timeout: 300000,
         executablePath: process.env.CHROME_PATH || undefined,
-                        args: [
-                            '--no-sandbox',
-                            '--disable-setuid-sandbox',
-                            '--disable-dev-shm-usage',
-                            '--disable-accelerated-2d-canvas',
-                            '--no-first-run',
-                            '--no-zygote',
-                            '--disable-gpu',
-                            '--single-process',
-                            '--disable-web-security',
-                            '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
-                            '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        ]
+        args: [
+            '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
+            '--disable-gpu', '--single-process', '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
+            '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
     }
-});
+};
+
+var client = new Client(clientOptions);
 
 attachClientEvents();
 
@@ -891,31 +896,7 @@ app.listen(PORT, '0.0.0.0', function () {
             if (retries > 0) {
                 setTimeout(function() {
                     if (client) client.destroy().catch(function(){});
-                    client = new Client({
-                        authStrategy: new LocalAuth({ dataPath: authDataPath }),
-                        webVersionCache: {
-                            type: 'local',
-                            path: path.join(DATA_DIR, '.wwebjs_cache'),
-                        },
-                        puppeteer: {
-                            headless: true,
-                            protocolTimeout: 600000,
-                            executablePath: process.env.CHROME_PATH || undefined,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--single-process',
-            '--disable-web-security',
-            '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
-            '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        ]
-                        }
-                    });
+                    client = new Client(clientOptions);
                     attachClientEvents();
                     tryInit(retries - 1);
                 }, 30000);
