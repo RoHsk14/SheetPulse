@@ -18,7 +18,9 @@ const WebSocket = require('ws');
 const path = require('path');
 const os = require('os');
 
-var IS_HF = !!(process.env.HF_SPACE || process.env.SPACE_ID || process.env.HUGGINGFACE_SPACE);
+var HF_ENVS = ['HF_SPACE','SPACE_ID','HUGGINGFACE_SPACE','HF_TOKEN','SPACES_URL'];
+var IS_HF = HF_ENVS.some(function(n){ return process.env[n]; });
+if (!IS_HF) try { IS_HF = fs.existsSync('/data') && fs.statSync('/data').isDirectory(); } catch(_){}
 var DATA_DIR = IS_HF ? '/data' : '.';
 var authDataPath = path.join(DATA_DIR, '.wwebjs_auth');
 var CONFIG_PATH = path.join(DATA_DIR, 'config.json');
@@ -29,6 +31,18 @@ function findSaPath() {
     return fs.existsSync(fallback) ? fallback : primary;
 }
 var SA_PATH = findSaPath();
+/* migrate data from alternate location if current is empty */
+(function() {
+    var altDir = IS_HF ? '.' : '/data';
+    if (!fs.existsSync(CONFIG_PATH)) {
+        var alt = path.join(altDir, 'config.json');
+        if (fs.existsSync(alt)) { try { fs.copyFileSync(alt, CONFIG_PATH); } catch(_){} }
+    }
+    if (!fs.existsSync(authDataPath)) {
+        var altA = path.join(altDir, '.wwebjs_auth');
+        if (fs.existsSync(altA)) { try { fs.cpSync(altA, authDataPath, {recursive:true}); } catch(_){} }
+    }
+})();
 const POLL_INTERVAL = 30000;
 
 function loadConfig() {
