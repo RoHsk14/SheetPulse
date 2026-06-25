@@ -759,6 +759,37 @@ app.get('/debug', function (req, res) {
     res.json({ clientStatus, hasQr: !!qrCodeData, qrLen: qrCodeData ? qrCodeData.length : 0, hasPairing: !!pairingCodeData, sheetConfigured: !!config.sheetId, config, commit: process.env.RENDER_GIT_COMMIT || process.env.HF_SPACE || 'local' });
 });
 
+app.post('/api/reset', function (req, res) {
+    if (client) client.destroy().catch(function(){});
+    clientStatus = 'resetting';
+    var dir = authDataPath;
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
+    setTimeout(function() {
+        client = new Client({
+            authStrategy: new LocalAuth({ dataPath: dir }),
+            webVersionCache: { type: 'local', path: path.join(DATA_DIR, '.wwebjs_cache') },
+            puppeteer: {
+                headless: true, protocolTimeout: 600000,
+                executablePath: process.env.CHROME_PATH || undefined,
+                args: [
+                    '--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas','--no-first-run','--no-zygote',
+                    '--disable-gpu','--single-process','--disable-web-security',
+                    '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
+                    '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                ]
+            }
+        });
+        qrCodeData = null;
+        pairingCodeData = null;
+        attachClientEvents();
+        client.initialize().catch(function (err) {
+            console.error('Erreur init apres reset:', err.message);
+        });
+        res.json({ success: true, message: 'Session reinitialisee, scannez le QR' });
+    }, 2000);
+});
+
 var PORT = process.env.PORT || 3000;
 
 function attachClientEvents() {
