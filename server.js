@@ -108,29 +108,49 @@ function extractSheetId(v) {
     return m ? m[1] : v;
 }
 
+function parseServiceAccountKey(raw) {
+    if (!raw) return null;
+    try {
+        var obj = JSON.parse(raw);
+        if (obj && obj.private_key) return obj;
+        throw new Error('private_key missing');
+    } catch (e) {
+        if (e.message !== 'private_key missing' && !(e instanceof SyntaxError)) throw e;
+        var fixed = raw.replace(/"private_key"\s*:\s*"([\s\S]*?)"\s*[,}]/, function (m, v) {
+            return m.replace(v, v.replace(/\n/g, '\\n').replace(/\r/g, '\\r'));
+        });
+        var obj = JSON.parse(fixed);
+        if (obj && obj.private_key) return obj;
+        return null;
+    }
+}
+
 function initSheets() {
     try {
         const { google } = require('googleapis');
         var auth;
         var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
         if (envKey) {
-            var creds = JSON.parse(envKey);
-            auth = new google.auth.JWT(
-                creds.client_email,
-                null,
-                creds.private_key,
-                ['https://www.googleapis.com/auth/spreadsheets']
-            );
-        } else {
-            if (!fs.existsSync(SA_PATH)) {
-                console.log('service-account.json manquant');
-                return null;
+            var creds = parseServiceAccountKey(envKey);
+            if (creds && creds.private_key) {
+                auth = new google.auth.JWT(
+                    creds.client_email,
+                    null,
+                    creds.private_key,
+                    ['https://www.googleapis.com/auth/spreadsheets']
+                );
+                return google.sheets({ version: 'v4', auth: auth });
             }
-            auth = new google.auth.GoogleAuth({
-                keyFile: SA_PATH,
-                scopes: ['https://www.googleapis.com/auth/spreadsheets']
-            });
+            console.log('GOOGLE_SERVICE_ACCOUNT_KEY invalide, fallback vers service-account.json');
         }
+        if (!fs.existsSync(SA_PATH)) {
+            console.log('service-account.json manquant');
+            return null;
+        }
+        auth = new google.auth.GoogleAuth({
+            keyFile: SA_PATH,
+            scopes: ['https://www.googleapis.com/auth/spreadsheets']
+        });
         return google.sheets({ version: 'v4', auth: auth });
     } catch (e) {
         console.log('Erreur init Sheets:', e.message);
@@ -141,7 +161,10 @@ function initSheets() {
 function getSaEmail() {
     try {
         var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-        if (envKey) return JSON.parse(envKey).client_email;
+        if (envKey) {
+            var creds = parseServiceAccountKey(envKey);
+            if (creds) return creds.client_email;
+        }
         return JSON.parse(fs.readFileSync(SA_PATH, 'utf8')).client_email;
     } catch { return 'service account'; }
 }
@@ -644,21 +667,32 @@ app.get('/api/debug-auth', async function (req, res) {
     try {
         const { google } = require('googleapis');
         var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-        if (!envKey) return res.json({ error: 'GOOGLE_SERVICE_ACCOUNT_KEY not set' });
-        var creds = JSON.parse(envKey);
+        var creds = null;
+        var source = 'none';
+        if (envKey) {
+            creds = parseServiceAccountKey(envKey);
+            source = 'env';
+        }
+        if (!creds) {
+            if (fs.existsSync(SA_PATH)) {
+                creds = JSON.parse(fs.readFileSync(SA_PATH, 'utf8'));
+                source = 'file';
+            }
+        }
+        if (!creds) return res.json({ error: 'Aucune credential trouvee (ni env, ni file)', envSet: !!envKey, fileExists: fs.existsSync(SA_PATH) });
         var fields = Object.keys(creds);
         var hasPrivateKey = 'private_key' in creds;
         var pkType = typeof creds.private_key;
         var pkLen = creds.private_key ? creds.private_key.length : 0;
         if (!hasPrivateKey || !creds.private_key) {
-            return res.json({ error: 'private_key missing in JSON', fields, hasPrivateKey, pkType, client_email: creds.client_email });
+            return res.json({ error: 'private_key missing', source, fields, hasPrivateKey, pkType, client_email: creds.client_email });
         }
         var auth = new google.auth.JWT(
             creds.client_email, null, creds.private_key,
             ['https://www.googleapis.com/auth/spreadsheets']
         );
         var token = await auth.getAccessToken();
-        res.json({ email: creds.client_email, token_received: !!token, project_id: creds.project_id, fields, pkLen });
+        res.json({ source, email: creds.client_email, token_received: !!token, project_id: creds.project_id, fields, pkLen });
     } catch (e) {
         res.json({ error: e.message, stack: e.stack ? e.stack.split('\n')[0] : null });
     }
