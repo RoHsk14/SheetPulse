@@ -21,7 +21,13 @@ const os = require('os');
 var DATA_DIR = process.env.HF_SPACE ? '/data' : '.';
 var authDataPath = path.join(DATA_DIR, '.wwebjs_auth');
 var CONFIG_PATH = path.join(DATA_DIR, 'config.json');
-var SA_PATH = path.join(DATA_DIR, 'service-account.json');
+function findSaPath() {
+    var primary = path.join(DATA_DIR, 'service-account.json');
+    if (fs.existsSync(primary)) return primary;
+    var fallback = path.join(__dirname, 'service-account.json');
+    return fs.existsSync(fallback) ? fallback : primary;
+}
+var SA_PATH = findSaPath();
 const POLL_INTERVAL = 30000;
 
 function loadConfig() {
