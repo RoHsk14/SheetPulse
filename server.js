@@ -135,30 +135,26 @@ function parseServiceAccountKey(raw) {
 function initSheets() {
     try {
         const { google } = require('googleapis');
-        var auth;
+        if (fs.existsSync(SA_PATH)) {
+            var auth = new google.auth.GoogleAuth({
+                keyFile: SA_PATH,
+                scopes: ['https://www.googleapis.com/auth/spreadsheets']
+            });
+            return google.sheets({ version: 'v4', auth: auth });
+        }
         var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
         if (envKey) {
             var creds = parseServiceAccountKey(envKey);
             if (creds && creds.private_key) {
-                auth = new google.auth.JWT(
-                    creds.client_email,
-                    null,
-                    creds.private_key,
+                var jwt = new google.auth.JWT(
+                    creds.client_email, null, creds.private_key,
                     ['https://www.googleapis.com/auth/spreadsheets']
                 );
-                return google.sheets({ version: 'v4', auth: auth });
+                return google.sheets({ version: 'v4', auth: jwt });
             }
-            console.log('GOOGLE_SERVICE_ACCOUNT_KEY invalide, fallback vers service-account.json');
         }
-        if (!fs.existsSync(SA_PATH)) {
-            console.log('service-account.json manquant');
-            return null;
-        }
-        auth = new google.auth.GoogleAuth({
-            keyFile: SA_PATH,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets']
-        });
-        return google.sheets({ version: 'v4', auth: auth });
+        console.log('Aucune credential Google Sheets disponible');
+        return null;
     } catch (e) {
         console.log('Erreur init Sheets:', e.message);
         return null;
@@ -167,12 +163,14 @@ function initSheets() {
 
 function getSaEmail() {
     try {
+        if (fs.existsSync(SA_PATH))
+            return JSON.parse(fs.readFileSync(SA_PATH, 'utf8')).client_email;
         var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
         if (envKey) {
             var creds = parseServiceAccountKey(envKey);
             if (creds) return creds.client_email;
         }
-        return JSON.parse(fs.readFileSync(SA_PATH, 'utf8')).client_email;
+        return 'service account';
     } catch { return 'service account'; }
 }
 
@@ -673,20 +671,20 @@ app.get('/api/check-now', async function (req, res) {
 app.get('/api/debug-auth', async function (req, res) {
     try {
         const { google } = require('googleapis');
-        var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
         var creds = null;
         var source = 'none';
-        if (envKey) {
-            creds = parseServiceAccountKey(envKey);
-            source = 'env';
+        if (fs.existsSync(SA_PATH)) {
+            creds = JSON.parse(fs.readFileSync(SA_PATH, 'utf8'));
+            source = 'file';
         }
         if (!creds) {
-            if (fs.existsSync(SA_PATH)) {
-                creds = JSON.parse(fs.readFileSync(SA_PATH, 'utf8'));
-                source = 'file';
+            var envKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+            if (envKey) {
+                creds = parseServiceAccountKey(envKey);
+                source = 'env';
             }
         }
-        if (!creds) return res.json({ error: 'Aucune credential trouvee (ni env, ni file)', envSet: !!envKey, fileExists: fs.existsSync(SA_PATH) });
+        if (!creds) return res.json({ error: 'Aucune credential trouvee (ni env, ni file)', fileExists: fs.existsSync(SA_PATH), envSet: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY });
         var fields = Object.keys(creds);
         var hasPrivateKey = 'private_key' in creds;
         var pkType = typeof creds.private_key;
@@ -694,11 +692,12 @@ app.get('/api/debug-auth', async function (req, res) {
         if (!hasPrivateKey || !creds.private_key) {
             return res.json({ error: 'private_key missing', source, fields, hasPrivateKey, pkType, client_email: creds.client_email });
         }
-        var auth = new google.auth.JWT(
-            creds.client_email, null, creds.private_key,
-            ['https://www.googleapis.com/auth/spreadsheets']
-        );
-        var token = await auth.getAccessToken();
+        var auth = new google.auth.GoogleAuth({
+            credentials: creds,
+            scopes: ['https://www.googleapis.com/auth/spreadsheets']
+        });
+        var client = await auth.getClient();
+        var token = await client.getAccessToken();
         res.json({ source, email: creds.client_email, token_received: !!token, project_id: creds.project_id, fields, pkLen });
     } catch (e) {
         res.json({ error: e.message, stack: e.stack ? e.stack.split('\n')[0] : null });
