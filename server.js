@@ -18,7 +18,8 @@ const WebSocket = require('ws');
 const path = require('path');
 const os = require('os');
 
-var DATA_DIR = process.env.HF_SPACE ? '/data' : '.';
+var IS_HF = !!(process.env.HF_SPACE || process.env.SPACE_ID || process.env.HUGGINGFACE_SPACE);
+var DATA_DIR = IS_HF ? '/data' : '.';
 var authDataPath = path.join(DATA_DIR, '.wwebjs_auth');
 var CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 function findSaPath() {
@@ -859,6 +860,7 @@ app.listen(PORT, '0.0.0.0', function () {
             console.error('Erreur init WhatsApp (' + retries + ' retry left):', err.message);
             if (retries > 0) {
                 setTimeout(function() {
+                    if (client) client.destroy().catch(function(){});
                     client = new Client({
                         authStrategy: new LocalAuth({ dataPath: authDataPath }),
                         webVersionCache: {
